@@ -9,8 +9,14 @@ const DEFAULT_WATCHLIST = [
   "usIXIC",
   "usDJI",
   "yfN225",
+  "yfKS11",
   "yfGDAXI",
-  "ukUKX"
+  "ukUKX",
+  "yfBTCF",
+  "yfBCOM",
+  "yfGCF",
+  "yfCLF",
+  "yfHGF"
 ];
 const SHANGHAI_INDEX_CODES = new Set([
   "000001",

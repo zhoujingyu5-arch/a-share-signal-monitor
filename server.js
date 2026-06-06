@@ -23,8 +23,14 @@ const defaultSymbols = [
   "usIXIC",
   "usDJI",
   "yfN225",
+  "yfKS11",
   "yfGDAXI",
-  "ukUKX"
+  "ukUKX",
+  "yfBTCF",
+  "yfBCOM",
+  "yfGCF",
+  "yfCLF",
+  "yfHGF"
 ];
 const shanghaiIndexCodes = new Set([
   "000001",
@@ -49,12 +55,36 @@ const globalCatalog = [
   { name: "道琼斯工业", code: "DJI", symbol: "usDJI", market: "美国" },
   { name: "标普500波动率", code: "VIX", symbol: "usVIX", market: "美国" },
   { name: "日经225", code: "N225", symbol: "yfN225", market: "日本" },
+  { name: "韩国综合指数", code: "KS11", symbol: "yfKS11", market: "韩国" },
   { name: "德国DAX", code: "GDAXI", symbol: "yfGDAXI", market: "德国" },
-  { name: "英国富时100", code: "UKX", symbol: "ukUKX", market: "英国" }
+  { name: "英国富时100", code: "UKX", symbol: "ukUKX", market: "英国" },
+  { name: "CME比特币连续期货", code: "BTC=F", symbol: "yfBTCF", market: "加密期货" },
+  { name: "彭博大宗商品指数", code: "BCOM", symbol: "yfBCOM", market: "大宗商品" },
+  { name: "COMEX黄金连续期货", code: "GC=F", symbol: "yfGCF", market: "大宗商品" },
+  { name: "WTI原油连续期货", code: "CL=F", symbol: "yfCLF", market: "大宗商品" },
+  { name: "布伦特原油连续期货", code: "BZ=F", symbol: "yfBZF", market: "大宗商品" },
+  { name: "COMEX铜连续期货", code: "HG=F", symbol: "yfHGF", market: "大宗商品" },
+  { name: "COMEX白银连续期货", code: "SI=F", symbol: "yfSIF", market: "大宗商品" },
+  { name: "天然气连续期货", code: "NG=F", symbol: "yfNGF", market: "大宗商品" },
+  { name: "玉米连续期货", code: "ZC=F", symbol: "yfZCF", market: "农产品" },
+  { name: "小麦连续期货", code: "ZW=F", symbol: "yfZWF", market: "农产品" },
+  { name: "大豆连续期货", code: "ZS=F", symbol: "yfZSF", market: "农产品" }
 ];
 const yahooSymbols = {
   yfN225: "^N225",
-  yfGDAXI: "^GDAXI"
+  yfKS11: "^KS11",
+  yfGDAXI: "^GDAXI",
+  yfBTCF: "BTC=F",
+  yfBCOM: "^BCOM",
+  yfGCF: "GC=F",
+  yfCLF: "CL=F",
+  yfBZF: "BZ=F",
+  yfHGF: "HG=F",
+  yfSIF: "SI=F",
+  yfNGF: "NG=F",
+  yfZCF: "ZC=F",
+  yfZWF: "ZW=F",
+  yfZSF: "ZS=F"
 };
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -188,8 +218,9 @@ async function getYahooQuote(symbol) {
   const json = await fetchJson(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`);
   const result = json.chart?.result?.[0];
   const meta = result?.meta || {};
-  const price = Number(meta.regularMarketPrice);
-  const previousClose = Number(meta.chartPreviousClose || meta.previousClose);
+  const closes = (result?.indicators?.quote?.[0]?.close || []).filter((value) => Number.isFinite(Number(value))).map(Number);
+  const price = closes.at(-1) ?? Number(meta.regularMarketPrice);
+  const previousClose = closes.at(-2) ?? Number(meta.previousClose || meta.chartPreviousClose);
   const change = price - previousClose;
   return {
     secid: symbol,
