@@ -12,12 +12,16 @@ const stepLabels = ["破线", "拐头", "交叉", "排列", "乖离"];
 
 let watchlist = loadWatchlist();
 let timer = null;
+let searchTimer = null;
+let searchItems = [];
+let activeSearchIndex = -1;
 
 const els = {
   refreshBtn: document.querySelector("#refreshBtn"),
   autoRefresh: document.querySelector("#autoRefresh"),
   symbolInput: document.querySelector("#symbolInput"),
   addSymbol: document.querySelector("#addSymbol"),
+  searchResults: document.querySelector("#searchResults"),
   watchChips: document.querySelector("#watchChips"),
   signalGrid: document.querySelector("#signalGrid"),
   lastUpdate: document.querySelector("#lastUpdate"),
@@ -41,6 +45,61 @@ function loadWatchlist() {
 
 function saveWatchlist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(watchlist));
+}
+
+function addToWatchlist(secid) {
+  const normalized = normalizeSecid(secid);
+  if (!normalized || watchlist.includes(normalized)) return;
+  watchlist.push(normalized);
+  els.symbolInput.value = "";
+  hideSearchResults();
+  saveWatchlist();
+  renderChips();
+  refresh();
+}
+
+function hideSearchResults() {
+  searchItems = [];
+  activeSearchIndex = -1;
+  els.searchResults.hidden = true;
+  els.searchResults.innerHTML = "";
+}
+
+function renderSearchResults(items) {
+  searchItems = items;
+  activeSearchIndex = items.length ? 0 : -1;
+  els.searchResults.innerHTML = "";
+  items.forEach((item, index) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = `searchOption${index === activeSearchIndex ? " active" : ""}`;
+    const name = document.createElement("b");
+    name.textContent = item.name;
+    const meta = document.createElement("span");
+    meta.textContent = `${item.market} ${item.code}`;
+    option.append(name, meta);
+    option.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      addToWatchlist(item.secid);
+    });
+    els.searchResults.append(option);
+  });
+  els.searchResults.hidden = items.length === 0;
+}
+
+function updateActiveSearch() {
+  const options = els.searchResults.querySelectorAll(".searchOption");
+  options.forEach((option, index) => option.classList.toggle("active", index === activeSearchIndex));
+}
+
+async function searchByName(query) {
+  try {
+    const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    const json = await response.json();
+    if (json.ok && els.symbolInput.value.trim() === query) renderSearchResults(json.data);
+  } catch {
+    hideSearchResults();
+  }
 }
 
 function normalizeSecid(input) {
@@ -293,17 +352,39 @@ function schedule() {
 els.refreshBtn.addEventListener("click", refresh);
 els.autoRefresh.addEventListener("change", schedule);
 els.addSymbol.addEventListener("click", () => {
-  const secid = normalizeSecid(els.symbolInput.value);
-  if (!secid || watchlist.includes(secid)) return;
-  watchlist.push(secid);
-  els.symbolInput.value = "";
-  saveWatchlist();
-  renderChips();
-  refresh();
+  if (searchItems[activeSearchIndex]) {
+    addToWatchlist(searchItems[activeSearchIndex].secid);
+    return;
+  }
+  addToWatchlist(els.symbolInput.value);
 });
 els.symbolInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") els.addSymbol.click();
+  if (event.key === "ArrowDown" && searchItems.length) {
+    event.preventDefault();
+    activeSearchIndex = (activeSearchIndex + 1) % searchItems.length;
+    updateActiveSearch();
+  } else if (event.key === "ArrowUp" && searchItems.length) {
+    event.preventDefault();
+    activeSearchIndex = (activeSearchIndex - 1 + searchItems.length) % searchItems.length;
+    updateActiveSearch();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    els.addSymbol.click();
+  } else if (event.key === "Escape") {
+    hideSearchResults();
+  }
 });
+els.symbolInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  const query = els.symbolInput.value.trim();
+  if (!query) return hideSearchResults();
+  if (/^[01]?\.\d{0,6}$/.test(query) || /^\d{1,6}$/.test(query)) {
+    hideSearchResults();
+    return;
+  }
+  searchTimer = setTimeout(() => searchByName(query), 250);
+});
+els.symbolInput.addEventListener("blur", () => setTimeout(hideSearchResults, 120));
 
 renderChips();
 schedule();

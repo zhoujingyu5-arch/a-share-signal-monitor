@@ -140,6 +140,35 @@ async function getQuotes(secids) {
   }).filter(Boolean);
 }
 
+async function searchSymbols(keyword) {
+  const query = String(keyword || "").trim();
+  if (!query) return [];
+  const { stdout } = await execFileAsync("curl", [
+    "-sS",
+    "-L",
+    "--max-time",
+    "10",
+    "-H",
+    "Referer: https://finance.sina.com.cn",
+    `https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15&key=${encodeURIComponent(query)}`
+  ], { encoding: "binary", maxBuffer: 1024 * 1024 });
+  const text = new TextDecoder("gb18030").decode(Buffer.from(stdout, "binary"));
+  const content = text.match(/suggestvalue="([^"]*)"/)?.[1] || "";
+  return content.split(";").map((row) => {
+    const fields = row.split(",");
+    const marketCode = fields[3] || "";
+    if (!/^(sh|sz)\d{6}$/.test(marketCode)) return null;
+    const market = marketCode.startsWith("sh") ? "1" : "0";
+    return {
+      name: fields[0],
+      code: fields[2],
+      secid: `${market}.${fields[2]}`,
+      market: market === "1" ? "沪" : "深",
+      symbol: marketCode
+    };
+  }).filter(Boolean).slice(0, 12);
+}
+
 async function getEastmoneyKlines(secid, limit = 260, klt = "101") {
   const id = normalizeSecid(secid);
   const url = new URL("https://push2his.eastmoney.com/api/qt/stock/kline/get");
@@ -249,6 +278,10 @@ async function routeApi(req, res, url) {
     if (url.pathname === "/api/kline") {
       const secid = url.searchParams.get("secid");
       return send(res, 200, JSON.stringify({ ok: true, data: await getKlines(secid) }));
+    }
+    if (url.pathname === "/api/search") {
+      const keyword = url.searchParams.get("q") || "";
+      return send(res, 200, JSON.stringify({ ok: true, data: await searchSymbols(keyword) }));
     }
     if (url.pathname === "/api/batch") {
       const secids = (url.searchParams.get("secids") || defaultSymbols.join(",")).split(",").map(normalizeSecid).filter(Boolean);
