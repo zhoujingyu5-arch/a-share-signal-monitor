@@ -183,6 +183,50 @@ function sequentialSteps(conditions) {
   });
 }
 
+function average(values) {
+  const valid = values.filter((value) => Number.isFinite(value));
+  return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : 0;
+}
+
+function detect2B(rows, close) {
+  if (rows.length < 40) return { label: "无", tone: "neutral" };
+  const prior = rows.slice(-40, -5);
+  const recent = rows.slice(-5);
+  const priorLow = Math.min(...prior.map((row) => row.low));
+  const priorHigh = Math.max(...prior.map((row) => row.high));
+  const recentLow = Math.min(...recent.map((row) => row.low));
+  const recentHigh = Math.max(...recent.map((row) => row.high));
+  if (recentLow < priorLow * 0.995 && close > priorLow) {
+    return { label: "底部2B回收", tone: "up" };
+  }
+  if (recentHigh > priorHigh * 1.005 && close < priorHigh) {
+    return { label: "顶部2B回落", tone: "down" };
+  }
+  return { label: "无", tone: "neutral" };
+}
+
+function progressAt(index, direction, closes, highs, lows, e20, e60, e120) {
+  if (index < 120) return 0;
+  const close = closes[index];
+  const high60 = Math.max(...highs.slice(Math.max(0, index - 59), index + 1));
+  const low60 = Math.min(...lows.slice(Math.max(0, index - 59), index + 1));
+  const bias120 = ((close - e120[index]) / e120[index]) * 100;
+  const conditions = direction === "bull" ? [
+    close > e20[index],
+    e20[index] > e20[index - 1],
+    e20[index] > e60[index],
+    e20[index] > e60[index] && e60[index] > e120[index] && e60[index] > e60[index - 1],
+    bias120 > 12 || close >= high60 * 0.995
+  ] : [
+    close < e20[index],
+    e20[index] < e20[index - 1],
+    e20[index] < e60[index],
+    e20[index] < e60[index] && e60[index] < e120[index] && e60[index] < e60[index - 1],
+    bias120 < -12 || close <= low60 * 1.005
+  ];
+  return sequentialSteps(conditions).filter(Boolean).length;
+}
+
 function analyzeKlines(payload, quote) {
   const rows = payload.klines || [];
   if (rows.length < 120) {
@@ -202,6 +246,19 @@ function analyzeKlines(payload, quote) {
       bias120: null,
       maWidth: null,
       macdPct: null,
+      systemStage: "等待数据",
+      stageDays: 0,
+      slope20: null,
+      slopeChange: null,
+      volumeRatio: null,
+      density: null,
+      dense: false,
+      deduction20: null,
+      structure2B: { label: "无", tone: "neutral" },
+      rangePosition: null,
+      humanState: "无法判断",
+      riskReward: null,
+      riskRewardText: "数据不足",
       close: Number(quote?.price) || null,
       prevClose: null
     };
@@ -224,6 +281,17 @@ function analyzeKlines(payload, quote) {
   const maWidth = ((currentE20 - currentE120) / currentE120) * 100;
   const dif = e20.map((v, i) => v - e60[i]);
   const macdPct = (last(dif) / currentE60) * 100;
+  const slope20 = ((last(e20) - last(e20, 6)) / last(e20, 6)) * 100;
+  const priorSlope20 = ((last(e20, 6) - last(e20, 11)) / last(e20, 11)) * 100;
+  const slopeChange = slope20 - priorSlope20;
+  const volumeValues = rows.map((row) => Number(row.volume) || 0);
+  const volumeBase = average(volumeValues.slice(-21, -1));
+  const volumeRatio = volumeBase > 0 ? last(volumeValues) / volumeBase : null;
+  const density = ((Math.max(currentE20, currentE60, currentE120) - Math.min(currentE20, currentE60, currentE120)) / close) * 100;
+  const dense = density < 2.5;
+  const deduction20 = closes.at(-20);
+  const structure2B = detect2B(rows, close);
+  const rangePosition = high60 === low60 ? 50 : ((close - low60) / (high60 - low60)) * 100;
 
   const bullConditions = [
     close > currentE20,
@@ -243,6 +311,50 @@ function analyzeKlines(payload, quote) {
   const bearSteps = sequentialSteps(bearConditions);
   const bullScore = bullSteps.filter(Boolean).length;
   const bearScore = bearSteps.filter(Boolean).length;
+  const dominantDirection = bullScore > bearScore ? "bull" : bearScore > bullScore ? "bear" : "none";
+  const dominantScore = Math.max(bullScore, bearScore);
+  let systemStage = dense ? "均线密集 / 行情准备" : "转折观察";
+  if (dominantScore === 1 || dominantScore === 2) systemStage = "转折";
+  if (dominantScore === 3) systemStage = "开始";
+  if (dominantScore === 4) systemStage = "发展";
+  if (dominantScore === 5) systemStage = "极端";
+  if (dominantScore === 5 && ((dominantDirection === "bull" && slopeChange < 0) || (dominantDirection === "bear" && slopeChange > 0))) {
+    systemStage = "极端后的转折预警";
+  }
+  if (structure2B.label !== "无" && dominantScore < 3) systemStage = "2B转折观察";
+
+  let stageDays = 0;
+  if (dominantDirection !== "none" && dominantScore > 0) {
+    for (let index = closes.length - 1; index >= 120; index -= 1) {
+      if (progressAt(index, dominantDirection, closes, highs, lows, e20, e60, e120) !== dominantScore) break;
+      stageDays += 1;
+    }
+  }
+
+  let humanState = "常态";
+  if (bias120 >= 25) humanState = "正乖离极端 / 亢奋";
+  else if (bias120 >= 15) humanState = "正乖离偏高";
+  else if (bias120 <= -25) humanState = "负乖离极端 / 恐慌";
+  else if (bias120 <= -15) humanState = "负乖离偏低";
+  if (volumeRatio >= 1.8 && Math.abs(bias120) >= 15) humanState += " + 放量";
+
+  let riskReward = null;
+  let riskRewardText = "等待方向形成";
+  if (dominantDirection === "bull" && close > currentE20) {
+    const stop = currentE20;
+    const target = Math.max(currentE60, high60);
+    const risk = close - stop;
+    const reward = target - close;
+    if (risk > 0 && reward > 0) riskReward = reward / risk;
+    riskRewardText = riskReward ? `${riskReward.toFixed(1)} : 1` : "目标空间不足";
+  } else if (dominantDirection === "bear" && close < currentE20) {
+    const stop = currentE20;
+    const target = Math.min(currentE60, low60);
+    const risk = stop - close;
+    const reward = close - target;
+    if (risk > 0 && reward > 0) riskReward = reward / risk;
+    riskRewardText = riskReward ? `${riskReward.toFixed(1)} : 1` : "目标空间不足";
+  }
 
   let phase = "横向整理";
   let tone = "neutral";
@@ -307,6 +419,19 @@ function analyzeKlines(payload, quote) {
     bias120,
     maWidth,
     macdPct,
+    systemStage,
+    stageDays,
+    slope20,
+    slopeChange,
+    volumeRatio,
+    density,
+    dense,
+    deduction20,
+    structure2B,
+    rangePosition,
+    humanState,
+    riskReward,
+    riskRewardText,
     close,
     prevClose
   };
@@ -359,6 +484,10 @@ function renderSignals(quotes, klines) {
       const cls = analysis.bullSteps[index] ? "hitBull" : analysis.bearSteps[index] ? "hitBear" : "";
       return `<div class="step ${cls}"><b>${index + 1}</b><br>${label}</div>`;
     }).join("");
+    const slopeClass = analysis.slope20 > 0 ? "up" : analysis.slope20 < 0 ? "down" : "neutral";
+    const slopeText = analysis.slope20 === null ? "--" : `${analysis.slope20 >= 0 ? "+" : ""}${fmtNumber(analysis.slope20)}%`;
+    const volumeText = analysis.volumeRatio === null ? "--" : `${fmtNumber(analysis.volumeRatio)}x`;
+    const rangeText = analysis.rangePosition === null ? "--" : `${fmtNumber(analysis.rangePosition, 0)}%`;
     return `
       <article class="card">
         <div class="cardHead">
@@ -372,14 +501,26 @@ function renderSignals(quotes, klines) {
           </div>
         </div>
         <div class="phase">
-          <b class="${analysis.tone}">${analysis.phase}</b>
+          <div>
+            <span class="systemStage">${analysis.systemStage}</span>
+            <b class="${analysis.tone}">${analysis.phase}</b>
+          </div>
           <span class="score">多头进程 ${analysis.bullScore}/5 · 空头进程 ${analysis.bearScore}/5</span>
         </div>
         <div class="steps">${steps}</div>
+        <div class="dimensionGrid">
+          <div><span>价</span><b>60日位置 ${rangeText}</b></div>
+          <div><span>量</span><b>${volumeText}</b></div>
+          <div><span>时</span><b>${analysis.stageDays || 0} 个交易日</b></div>
+          <div><span>空</span><b>120乖离 ${fmtNumber(analysis.bias120)}%</b></div>
+        </div>
         <div class="facts">
-          <div class="fact"><span>EMA20 / 60 / 120</span><b>${fmtNumber(analysis.ema20)} · ${fmtNumber(analysis.ema60)} · ${fmtNumber(analysis.ema120)}</b></div>
-          <div class="fact"><span>120乖离</span><b class="${analysis.bias120 >= 0 ? "up" : "down"}">${fmtNumber(analysis.bias120)}%</b></div>
-          <div class="fact"><span>MACD%强度</span><b class="${analysis.macdPct >= 0 ? "up" : "down"}">${fmtNumber(analysis.macdPct)}%</b></div>
+          <div class="fact"><span>EMA20斜率 / 加速度</span><b class="${slopeClass}">${slopeText} / ${fmtNumber(analysis.slopeChange)}%</b></div>
+          <div class="fact"><span>均线密集度</span><b class="${analysis.dense ? "info" : "neutral"}">${fmtNumber(analysis.density)}% ${analysis.dense ? "· 密集" : ""}</b></div>
+          <div class="fact"><span>明日MA20抵扣价</span><b>${fmtNumber(analysis.deduction20)}</b></div>
+          <div class="fact"><span>2B结构</span><b class="${analysis.structure2B.tone}">${analysis.structure2B.label}</b></div>
+          <div class="fact"><span>人性 / 乖离状态</span><b>${analysis.humanState}</b></div>
+          <div class="fact"><span>参考盈亏比</span><b class="${analysis.riskReward >= 3 ? "up" : analysis.riskReward ? "warn" : "neutral"}">${analysis.riskRewardText}</b></div>
         </div>
         <p class="plan">${analysis.next}<br>${analysis.bottomLine}</p>
       </article>

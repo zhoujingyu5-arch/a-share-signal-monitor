@@ -65,6 +65,25 @@ h1 {
   font-weight: 760;
 }
 
+.titleLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.versionBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 26px;
+  border-radius: 5px;
+  background: #202720;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 #subtitle {
   color: var(--muted);
   margin-top: 8px;
@@ -298,13 +317,55 @@ h1 {
 }
 
 .phase b {
+  display: block;
   font-size: 15px;
+}
+
+.systemStage {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 760;
 }
 
 .score {
   white-space: nowrap;
   color: var(--muted);
   font-size: 13px;
+}
+
+.dimensionGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.dimensionGrid div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e5e9e3;
+  border-radius: 6px;
+  background: #fafbf9;
+}
+
+.dimensionGrid span,
+.dimensionGrid b {
+  display: block;
+}
+
+.dimensionGrid span {
+  margin-bottom: 3px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.dimensionGrid b {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .steps {
@@ -358,6 +419,7 @@ h1 {
   display: block;
   margin-top: 3px;
   font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 .plan {
@@ -385,6 +447,29 @@ h1 {
   margin-bottom: 12px;
 }
 
+.cycleMap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin: 4px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cycleMap span {
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f8faf7;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.cycleMap i {
+  font-style: normal;
+}
+
 .modelList b, .modelList span {
   display: block;
 }
@@ -400,6 +485,13 @@ h1 {
   border-bottom: 1px solid var(--line);
   padding: 14px 0;
   margin: 8px 0 14px;
+}
+
+.disclaimer {
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .leaders h3 {
@@ -436,6 +528,16 @@ h1 {
   }
   .marketBand, .signalGrid, .facts {
     grid-template-columns: 1fr;
+  }
+  .dimensionGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .phase {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .score {
+    white-space: normal;
   }
   .steps {
     grid-template-columns: repeat(2, 1fr);

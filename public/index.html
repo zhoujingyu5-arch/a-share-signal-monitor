@@ -3,15 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>全球转折信号监控</title>
+    <title>全球交易系统 2.0</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
         <div>
-          <h1>全球转折信号监控</h1>
-          <p id="subtitle">按“破线 → 拐头 → 交叉 → 排列 → 乖离”判断当前阶段</p>
+          <div class="titleLine">
+            <h1>全球交易系统</h1>
+            <span class="versionBadge">2.0</span>
+          </div>
+          <p id="subtitle">以价量时空为事实，按顺序识别“转折 → 开始 → 发展 → 极端 → 再转折”</p>
         </div>
         <div class="actions">
           <button id="refreshBtn" title="刷新行情">刷新</button>
@@ -63,7 +66,7 @@
 
         <aside class="panel">
           <div class="panelHead">
-            <h2>阶段模型</h2>
+            <h2>2.0 观察框架</h2>
           </div>
           <p class="sequenceRule">严格按顺序确认：前一步未完成，后一步不计入当前阶段。</p>
           <ol class="modelList">
@@ -73,10 +76,14 @@
             <li><b>第4步 排列</b><span>EMA20、60、120 多头或空头排列。</span></li>
             <li><b>第5步 乖离</b><span>价格远离 EMA120，进入极端或引力回归观察区。</span></li>
           </ol>
-          <div class="note">
-            <b>雷公文件要点</b>
-            <p>小周期先动，大周期确认；MACD 只说明强度，不单独当成转折；有预期也必须有底线。</p>
+          <div class="cycleMap">
+            <span>转折</span><i>→</i><span>开始</span><i>→</i><span>发展</span><i>→</i><span>极端</span><i>→</i><span>再转折</span>
           </div>
+          <div class="note">
+            <b>系统原则</b>
+            <p>图形不做预测，只描述已经发生的事实。价格与成交量优先；2B只处理过度偏离后的回归，真正的大行情重点观察均线密集后的扩散。</p>
+          </div>
+          <p class="disclaimer">盈亏比为基于 EMA20 与近60日空间的机械参考，不构成交易建议。</p>
           <div class="leaders">
             <h3>涨幅前列</h3>
             <div id="leadersList"></div>
