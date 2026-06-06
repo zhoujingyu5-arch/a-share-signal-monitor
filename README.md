@@ -31,11 +31,21 @@
 
 需要 Node.js 18 或更高版本，以及系统中的 `curl`。
 
+macOS 可以直接双击：
+
+```text
+启动全球交易系统.command
+```
+
+也可以使用终端：
+
 ```bash
 npm start
 ```
 
 打开 <http://localhost:5173>。
+
+不要直接打开 `public/index.html`，`file://` 页面无法访问实时行情 API。详细步骤见 [使用说明手册.md](./使用说明手册.md)。
 
 ## 数据说明
 
