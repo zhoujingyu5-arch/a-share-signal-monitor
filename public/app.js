@@ -1,4 +1,12 @@
-const DEFAULT_WATCHLIST = ["1.000001", "0.399001", "0.399006", "1.000300", "1.000905"];
+const DEFAULT_WATCHLIST = ["1.000001", "0.399001", "0.399006", "1.000300", "1.000905", "1.000852"];
+const SHANGHAI_INDEX_CODES = new Set([
+  "000001",
+  "000016",
+  "000300",
+  "000688",
+  "000852",
+  "000905"
+]);
 const STORAGE_KEY = "ashare-signal-watchlist";
 const stepLabels = ["破线", "拐头", "交叉", "排列", "乖离"];
 
@@ -40,7 +48,7 @@ function normalizeSecid(input) {
   if (/^[01]\.\d{6}$/.test(raw)) return raw;
   const code = raw.replace(/[^\d]/g, "").slice(-6);
   if (!/^\d{6}$/.test(code)) return "";
-  const market = code.startsWith("6") || code.startsWith("9") ? "1" : "0";
+  const market = code.startsWith("6") || code.startsWith("9") || SHANGHAI_INDEX_CODES.has(code) ? "1" : "0";
   return `${market}.${code}`;
 }
 

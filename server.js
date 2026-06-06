@@ -10,7 +10,15 @@ const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 5173);
 const execFileAsync = promisify(execFile);
 
-const defaultSymbols = ["1.000001", "0.399001", "0.399006", "1.000300", "1.000905"];
+const defaultSymbols = ["1.000001", "0.399001", "0.399006", "1.000300", "1.000905", "1.000852"];
+const shanghaiIndexCodes = new Set([
+  "000001",
+  "000016",
+  "000300",
+  "000688",
+  "000852",
+  "000905"
+]);
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -25,7 +33,7 @@ function normalizeSecid(input = "") {
   if (/^[01]\.\d{6}$/.test(raw)) return raw;
   const code = raw.replace(/[^\d]/g, "").slice(-6);
   if (!/^\d{6}$/.test(code)) return "";
-  const market = code.startsWith("6") || code.startsWith("9") ? "1" : "0";
+  const market = code.startsWith("6") || code.startsWith("9") || shanghaiIndexCodes.has(code) ? "1" : "0";
   return `${market}.${code}`;
 }
 
