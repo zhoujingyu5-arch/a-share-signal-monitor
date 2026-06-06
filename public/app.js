@@ -167,6 +167,15 @@ function crossedDown(a, b) {
   return last(a, 2) >= last(b, 2) && last(a) < last(b);
 }
 
+function sequentialSteps(conditions) {
+  let previousComplete = true;
+  return conditions.map((condition) => {
+    const complete = previousComplete && condition;
+    previousComplete = complete;
+    return complete;
+  });
+}
+
 function analyzeKlines(payload, quote) {
   const rows = payload.klines || [];
   if (rows.length < 120) {
@@ -209,20 +218,22 @@ function analyzeKlines(payload, quote) {
   const dif = e20.map((v, i) => v - e60[i]);
   const macdPct = (last(dif) / currentE60) * 100;
 
-  const bullSteps = [
+  const bullConditions = [
     close > currentE20,
     last(e20) > last(e20, 2),
     last(e20) > last(e60),
     last(e20) > last(e60) && last(e60) > last(e120) && last(e60) > last(e60, 2),
     bias120 > 12 || close >= high60 * 0.995
   ];
-  const bearSteps = [
+  const bearConditions = [
     close < currentE20,
     last(e20) < last(e20, 2),
     last(e20) < last(e60),
     last(e20) < last(e60) && last(e60) < last(e120) && last(e60) < last(e60, 2),
     bias120 < -12 || close <= low60 * 1.005
   ];
+  const bullSteps = sequentialSteps(bullConditions);
+  const bearSteps = sequentialSteps(bearConditions);
   const bullScore = bullSteps.filter(Boolean).length;
   const bearScore = bearSteps.filter(Boolean).length;
 
@@ -233,16 +244,16 @@ function analyzeKlines(payload, quote) {
 
   if (bullScore >= bearScore && bullScore > 0) {
     tone = bullScore >= 4 ? "up" : "info";
-    if (bullSteps[4]) {
+    if (bullScore === 5) {
       phase = "上升第5步：正乖离/加速";
       next = "赚钱效应强，重点观察放量滞涨、跌破 EMA20 与短线拐头。";
-    } else if (bullSteps[3]) {
+    } else if (bullScore === 4) {
       phase = "上升第4步：多头排列";
       next = "趋势进入发展段，观察能否沿 EMA20/60 推进，并防止排列被破坏。";
-    } else if (bullSteps[2]) {
+    } else if (bullScore === 3) {
       phase = crossedUp(e20, e60) ? "上升第3步：刚金叉" : "上升第3步：金叉后";
       next = "下一步看 EMA60 与 EMA120 能否跟上，形成多头排列。";
-    } else if (bullSteps[1]) {
+    } else if (bullScore === 2) {
       phase = "上升第2步：短均拐头";
       next = "下一步等 EMA20 上穿 EMA60，失败则回到原级别处理。";
     } else {
@@ -254,16 +265,16 @@ function analyzeKlines(payload, quote) {
 
   if (bearScore > bullScore && bearScore > 0) {
     tone = bearScore >= 4 ? "down" : "warn";
-    if (bearSteps[4]) {
+    if (bearScore === 5) {
       phase = "下降第5步：负乖离/杀跌";
       next = "恐慌段可能出现引力回归，观察是否重新站回 EMA20。";
-    } else if (bearSteps[3]) {
+    } else if (bearScore === 4) {
       phase = "下降第4步：空头排列";
       next = "趋势进入下行发展段，反弹若不能收复 EMA20/60，仍偏弱。";
-    } else if (bearSteps[2]) {
+    } else if (bearScore === 3) {
       phase = crossedDown(e20, e60) ? "下降第3步：刚死叉" : "下降第3步：死叉后";
       next = "下一步看 EMA60 与 EMA120 是否转为空头排列。";
-    } else if (bearSteps[1]) {
+    } else if (bearScore === 2) {
       phase = "下降第2步：短均拐头";
       next = "下一步警惕 EMA20 下穿 EMA60；若收复短均则转入修复。";
     } else {
@@ -355,7 +366,7 @@ function renderSignals(quotes, klines) {
         </div>
         <div class="phase">
           <b class="${analysis.tone}">${analysis.phase}</b>
-          <span class="score">多 ${analysis.bullScore}/5 · 空 ${analysis.bearScore}/5</span>
+          <span class="score">多头进程 ${analysis.bullScore}/5 · 空头进程 ${analysis.bearScore}/5</span>
         </div>
         <div class="steps">${steps}</div>
         <div class="facts">

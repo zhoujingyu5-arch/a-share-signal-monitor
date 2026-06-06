@@ -371,6 +371,16 @@ h1 {
   padding-left: 20px;
 }
 
+.sequenceRule {
+  margin-bottom: 14px;
+  padding: 9px 10px;
+  border-left: 3px solid var(--amber);
+  background: #faf7ef;
+  color: #76551d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .modelList li {
   margin-bottom: 12px;
 }
