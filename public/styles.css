@@ -1,0 +1,383 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f7f4;
+  --ink: #18201c;
+  --muted: #687069;
+  --line: #d9ded7;
+  --panel: #ffffff;
+  --green: #14855f;
+  --red: #c3453f;
+  --amber: #b7791f;
+  --blue: #285f9f;
+  --shadow: 0 12px 30px rgba(28, 36, 31, 0.08);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+button, input {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #202720;
+  background: #202720;
+  color: #fff;
+  border-radius: 6px;
+  min-height: 38px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+button.secondary, .chip button {
+  background: #fff;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.shell {
+  width: min(1440px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 0 40px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+  padding: 8px 0 20px;
+}
+
+h1, h2, h3, p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 760;
+}
+
+#subtitle {
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.actions, .inputRow, .chips {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.controls {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.inputRow input {
+  width: min(420px, 54vw);
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 12px;
+}
+
+.chips {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--muted);
+}
+
+.chip button {
+  min-height: 24px;
+  width: 24px;
+  padding: 0;
+}
+
+.marketBand {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.metric, .panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.metric {
+  padding: 16px;
+}
+
+.metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.metric strong {
+  font-size: 24px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.panelHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.panelHead h2 {
+  font-size: 18px;
+}
+
+.panelHead span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.signalGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.cardHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.name {
+  font-weight: 740;
+  font-size: 18px;
+}
+
+.code {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.price {
+  text-align: right;
+}
+
+.price strong {
+  display: block;
+  font-size: 22px;
+}
+
+.up { color: var(--red); }
+.down { color: var(--green); }
+.neutral { color: var(--muted); }
+.warn { color: var(--amber); }
+.info { color: var(--blue); }
+
+.phase {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f7f8f6;
+  margin-bottom: 12px;
+}
+
+.phase b {
+  font-size: 15px;
+}
+
+.score {
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.step {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 6px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.step.hitBull {
+  border-color: rgba(195, 69, 63, 0.35);
+  background: rgba(195, 69, 63, 0.08);
+  color: var(--red);
+}
+
+.step.hitBear {
+  border-color: rgba(20, 133, 95, 0.35);
+  background: rgba(20, 133, 95, 0.08);
+  color: var(--green);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.fact {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.fact span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fact b {
+  display: block;
+  margin-top: 3px;
+  font-size: 14px;
+}
+
+.plan {
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.modelList {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.modelList li {
+  margin-bottom: 12px;
+}
+
+.modelList b, .modelList span {
+  display: block;
+}
+
+.modelList span, .note p {
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.note {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0;
+  margin: 8px 0 14px;
+}
+
+.leaders h3 {
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.leader {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid #edf0eb;
+  font-size: 13px;
+}
+
+@media (max-width: 980px) {
+  .controls, .topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .chips {
+    justify-content: flex-start;
+  }
+  .marketBand, .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .shell {
+    width: min(100vw - 20px, 1440px);
+    padding-top: 14px;
+  }
+  .marketBand, .signalGrid, .facts {
+    grid-template-columns: 1fr;
+  }
+  .steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .inputRow {
+    align-items: stretch;
+  }
+  .inputRow input {
+    width: 100%;
+  }
+}
