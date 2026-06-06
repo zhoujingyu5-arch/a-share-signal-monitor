@@ -1,4 +1,17 @@
-const DEFAULT_WATCHLIST = ["1.000001", "0.399001", "0.399006", "1.000300", "1.000905", "1.000852"];
+const DEFAULT_WATCHLIST = [
+  "sh000001",
+  "sz399006",
+  "sh000300",
+  "sh000852",
+  "bj899050",
+  "hkHSI",
+  "usINX",
+  "usIXIC",
+  "usDJI",
+  "yfN225",
+  "yfGDAXI",
+  "ukUKX"
+];
 const SHANGHAI_INDEX_CODES = new Set([
   "000001",
   "000016",
@@ -7,7 +20,7 @@ const SHANGHAI_INDEX_CODES = new Set([
   "000852",
   "000905"
 ]);
-const STORAGE_KEY = "ashare-signal-watchlist";
+const STORAGE_KEY = "global-signal-watchlist-v1";
 const stepLabels = ["破线", "拐头", "交叉", "排列", "乖离"];
 
 let watchlist = loadWatchlist();
@@ -80,7 +93,7 @@ function renderSearchResults(items) {
     option.append(name, meta);
     option.addEventListener("mousedown", (event) => {
       event.preventDefault();
-      addToWatchlist(item.secid);
+      addToWatchlist(item.symbol || item.secid);
     });
     els.searchResults.append(option);
   });
@@ -104,11 +117,17 @@ async function searchByName(query) {
 
 function normalizeSecid(input) {
   const raw = String(input || "").trim();
-  if (/^[01]\.\d{6}$/.test(raw)) return raw;
+  if (/^(sh|sz|bj)\d{6}$/i.test(raw)) return `${raw.slice(0, 2).toLowerCase()}${raw.slice(2)}`;
+  if (/^(hk|us|uk|yf)[a-z0-9.]+$/i.test(raw)) return `${raw.slice(0, 2).toLowerCase()}${raw.slice(2).toUpperCase()}`;
+  if (/^[01]\.\d{6}$/.test(raw)) {
+    const [market, code] = raw.split(".");
+    return `${market === "1" ? "sh" : "sz"}${code}`;
+  }
   const code = raw.replace(/[^\d]/g, "").slice(-6);
   if (!/^\d{6}$/.test(code)) return "";
-  const market = code.startsWith("6") || code.startsWith("9") || SHANGHAI_INDEX_CODES.has(code) ? "1" : "0";
-  return `${market}.${code}`;
+  if (code === "899050") return "bj899050";
+  const market = code.startsWith("6") || code.startsWith("9") || SHANGHAI_INDEX_CODES.has(code) ? "sh" : "sz";
+  return `${market}${code}`;
 }
 
 function fmtNumber(value, digits = 2) {
@@ -150,6 +169,27 @@ function crossedDown(a, b) {
 
 function analyzeKlines(payload, quote) {
   const rows = payload.klines || [];
+  if (rows.length < 120) {
+    return {
+      phase: "历史数据不足",
+      tone: "warn",
+      next: `当前仅取得 ${rows.length} 根日线，暂不进行五阶段判断。`,
+      bottomLine: "实时价格仍可监控，待数据源补齐历史日线后自动恢复。",
+      bullSteps: [false, false, false, false, false],
+      bearSteps: [false, false, false, false, false],
+      bullScore: 0,
+      bearScore: 0,
+      ema20: null,
+      ema60: null,
+      ema120: null,
+      bias20: null,
+      bias120: null,
+      maWidth: null,
+      macdPct: null,
+      close: Number(quote?.price) || null,
+      prevClose: null
+    };
+  }
   const closes = rows.map((r) => r.close);
   const highs = rows.map((r) => r.high);
   const lows = rows.map((r) => r.low);
@@ -276,13 +316,13 @@ function renderChips() {
 }
 
 function renderMarket(market) {
-  els.breadthLabel.textContent = market.sample ? "上涨家数样本" : "上涨家数";
-  els.amountLabel.textContent = market.sample ? "样本成交额" : "全A成交额";
+  els.breadthLabel.textContent = "监控池上涨 / 下跌";
+  els.amountLabel.textContent = "当前最强";
   els.upDown.textContent = `${market.up} / ${market.down}`;
   els.upRatio.textContent = `${(market.upRatio * 100).toFixed(1)}%`;
-  els.marketAmount.textContent = fmtMoney(market.amount);
-  els.mainFlow.textContent = fmtMoney(market.mainNetInflow);
-  els.mainFlow.className = market.mainNetInflow >= 0 ? "up" : "down";
+  els.marketAmount.textContent = market.topGainers[0]?.name || "--";
+  els.mainFlow.textContent = `${market.total} 个`;
+  els.mainFlow.className = "info";
   els.leadersList.innerHTML = market.topGainers.map((item) => `
     <div class="leader">
       <span>${item.name} <span class="neutral">${item.code}</span></span>

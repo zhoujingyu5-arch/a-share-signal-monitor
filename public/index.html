@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>A股转折信号监控</title>
+    <title>全球转折信号监控</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
         <div>
-          <h1>A股转折信号监控</h1>
+          <h1>全球转折信号监控</h1>
           <p id="subtitle">按“破线 → 拐头 → 交叉 → 排列 → 乖离”判断当前阶段</p>
         </div>
         <div class="actions">
@@ -25,7 +25,7 @@
       <section class="controls" aria-label="监控设置">
         <div class="inputRow">
           <div class="searchBox">
-            <input id="symbolInput" type="text" autocomplete="off" placeholder="输入中文名称或代码，如 中证1000、茅台、600519" />
+            <input id="symbolInput" type="text" autocomplete="off" placeholder="输入全球指数、证券或代码，如 北证50、标普500、茅台" />
             <div id="searchResults" class="searchResults" hidden></div>
           </div>
           <button id="addSymbol">添加</button>
@@ -39,7 +39,7 @@
           <strong id="upDown">--</strong>
         </div>
         <div class="metric">
-          <span>实时上涨比例</span>
+          <span>监控池上涨比例</span>
           <strong id="upRatio">--</strong>
         </div>
         <div class="metric">
@@ -47,7 +47,7 @@
           <strong id="marketAmount">--</strong>
         </div>
         <div class="metric">
-          <span>主力净流入</span>
+          <span>监控标的数</span>
           <strong id="mainFlow">--</strong>
         </div>
       </section>

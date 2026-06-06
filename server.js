@@ -10,7 +10,22 @@ const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 5173);
 const execFileAsync = promisify(execFile);
 
-const defaultSymbols = ["1.000001", "0.399001", "0.399006", "1.000300", "1.000905", "1.000852"];
+const defaultSymbols = [
+  "sh000001",
+  "sz399001",
+  "sz399006",
+  "sh000300",
+  "sh000905",
+  "sh000852",
+  "bj899050",
+  "hkHSI",
+  "usINX",
+  "usIXIC",
+  "usDJI",
+  "yfN225",
+  "yfGDAXI",
+  "ukUKX"
+];
 const shanghaiIndexCodes = new Set([
   "000001",
   "000016",
@@ -19,6 +34,28 @@ const shanghaiIndexCodes = new Set([
   "000852",
   "000905"
 ]);
+const globalCatalog = [
+  { name: "北证50", code: "899050", symbol: "bj899050", market: "中国" },
+  { name: "上证指数", code: "000001", symbol: "sh000001", market: "中国" },
+  { name: "深证成指", code: "399001", symbol: "sz399001", market: "中国" },
+  { name: "创业板指", code: "399006", symbol: "sz399006", market: "中国" },
+  { name: "沪深300", code: "000300", symbol: "sh000300", market: "中国" },
+  { name: "中证500", code: "000905", symbol: "sh000905", market: "中国" },
+  { name: "中证1000", code: "000852", symbol: "sh000852", market: "中国" },
+  { name: "科创50", code: "000688", symbol: "sh000688", market: "中国" },
+  { name: "恒生指数", code: "HSI", symbol: "hkHSI", market: "香港" },
+  { name: "标普500", code: "INX", symbol: "usINX", market: "美国" },
+  { name: "纳斯达克综合", code: "IXIC", symbol: "usIXIC", market: "美国" },
+  { name: "道琼斯工业", code: "DJI", symbol: "usDJI", market: "美国" },
+  { name: "标普500波动率", code: "VIX", symbol: "usVIX", market: "美国" },
+  { name: "日经225", code: "N225", symbol: "yfN225", market: "日本" },
+  { name: "德国DAX", code: "GDAXI", symbol: "yfGDAXI", market: "德国" },
+  { name: "英国富时100", code: "UKX", symbol: "ukUKX", market: "英国" }
+];
+const yahooSymbols = {
+  yfN225: "^N225",
+  yfGDAXI: "^GDAXI"
+};
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -27,20 +64,30 @@ const mime = {
   ".svg": "image/svg+xml"
 };
 
-function normalizeSecid(input = "") {
+function normalizeSymbol(input = "") {
   const raw = String(input).trim();
   if (!raw) return "";
-  if (/^[01]\.\d{6}$/.test(raw)) return raw;
+  const catalogMatch = globalCatalog.find((item) => item.symbol.toLowerCase() === raw.toLowerCase());
+  if (catalogMatch) return catalogMatch.symbol;
+  if (/^(sh|sz|bj)\d{6}$/i.test(raw)) return `${raw.slice(0, 2).toLowerCase()}${raw.slice(2)}`;
+  if (/^(hk|us|uk|yf)[a-z0-9.]+$/i.test(raw)) {
+    return `${raw.slice(0, 2).toLowerCase()}${raw.slice(2).toUpperCase()}`;
+  }
+  if (/^[01]\.\d{6}$/.test(raw)) {
+    const [market, code] = raw.split(".");
+    return `${market === "1" ? "sh" : "sz"}${code}`;
+  }
   const code = raw.replace(/[^\d]/g, "").slice(-6);
   if (!/^\d{6}$/.test(code)) return "";
-  const market = code.startsWith("6") || code.startsWith("9") || shanghaiIndexCodes.has(code) ? "1" : "0";
-  return `${market}.${code}`;
+  if (code === "899050") return "bj899050";
+  const market = code.startsWith("6") || code.startsWith("9") || shanghaiIndexCodes.has(code) ? "sh" : "sz";
+  return `${market}${code}`;
 }
 
-function secidToSina(secid) {
-  const id = normalizeSecid(secid);
-  const [, code] = id.split(".");
-  return `${id.startsWith("1.") ? "sh" : "sz"}${code}`;
+function symbolToSecid(symbol) {
+  const id = normalizeSymbol(symbol);
+  if (!/^(sh|sz)\d{6}$/.test(id)) return "";
+  return `${id.startsWith("sh") ? "1" : "0"}.${id.slice(2)}`;
 }
 
 function send(res, status, body, type = "application/json; charset=utf-8") {
@@ -94,83 +141,134 @@ function parseKline(row) {
   };
 }
 
-async function getQuotes(secids) {
-  const ids = secids.map(normalizeSecid).filter(Boolean);
-  const sinaCodes = ids.map(secidToSina);
+async function getTencentQuotes(ids) {
+  if (!ids.length) return [];
   const { stdout } = await execFileAsync("curl", [
     "-sS",
     "-L",
     "--max-time",
     "12",
-    "-H",
-    "Referer: https://finance.sina.com.cn",
-    `https://hq.sinajs.cn/list=${sinaCodes.join(",")}`
+    `https://qt.gtimg.cn/q=${ids.join(",")}`
   ], { encoding: "binary", maxBuffer: 2 * 1024 * 1024 });
   const text = new TextDecoder("gb18030").decode(Buffer.from(stdout, "binary"));
   return text.split(/\n+/).map((line) => {
-    const codeMatch = line.match(/hq_str_(s[hz]\d{6})="/);
+    const codeMatch = line.match(/^v_([^=]+)=/);
     const dataMatch = line.match(/="([^"]*)"/);
     if (!codeMatch || !dataMatch || !dataMatch[1]) return null;
-    const secid = ids[sinaCodes.indexOf(codeMatch[1])] || "";
-    const [, code] = secid.split(".");
-    const fields = dataMatch[1].split(",");
-    const previousClose = Number(fields[2]);
+    const symbol = codeMatch[1];
+    const fields = dataMatch[1].split("~");
+    const previousClose = Number(fields[4]);
     const price = Number(fields[3]);
-    const change = price - previousClose;
-    const pct = previousClose ? (change / previousClose) * 100 : 0;
+    const change = Number(fields[31]) || price - previousClose;
+    const pct = Number(fields[32]) || (previousClose ? (change / previousClose) * 100 : 0);
     return {
-      secid,
-      code,
-      market: Number(secid.slice(0, 1)),
-      name: fields[0],
+      secid: symbol,
+      code: fields[2],
+      market: symbol.slice(0, 2),
+      name: fields[1],
       price,
       pct,
       change,
-      volume: Number(fields[8]),
-      amount: Number(fields[9]),
-      high: Number(fields[4]),
-      low: Number(fields[5]),
-      open: Number(fields[1]),
+      volume: Number(fields[6]),
+      amount: Number(fields[37]) || 0,
+      high: Number(fields[33]),
+      low: Number(fields[34]),
+      open: Number(fields[5]),
       previousClose,
       totalMarketValue: null,
       floatMarketValue: null,
       mainNetInflow: null,
-      quoteTime: `${fields[30] || ""} ${fields[31] || ""}`.trim()
+      quoteTime: fields[30] || ""
     };
   }).filter(Boolean);
+}
+
+async function getYahooQuote(symbol) {
+  const yahooSymbol = yahooSymbols[symbol];
+  const json = await fetchJson(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`);
+  const result = json.chart?.result?.[0];
+  const meta = result?.meta || {};
+  const price = Number(meta.regularMarketPrice);
+  const previousClose = Number(meta.chartPreviousClose || meta.previousClose);
+  const change = price - previousClose;
+  return {
+    secid: symbol,
+    code: yahooSymbol.replace("^", ""),
+    market: "yf",
+    name: globalCatalog.find((item) => item.symbol === symbol)?.name || meta.shortName || yahooSymbol,
+    price,
+    pct: previousClose ? (change / previousClose) * 100 : 0,
+    change,
+    volume: Number(meta.regularMarketVolume) || 0,
+    amount: 0,
+    high: Number(meta.regularMarketDayHigh) || price,
+    low: Number(meta.regularMarketDayLow) || price,
+    open: Number(meta.regularMarketOpen) || price,
+    previousClose,
+    totalMarketValue: null,
+    floatMarketValue: null,
+    mainNetInflow: null,
+    quoteTime: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : ""
+  };
+}
+
+async function getQuotes(secids) {
+  const ids = secids.map(normalizeSymbol).filter(Boolean);
+  const tencentIds = ids.filter((id) => !id.startsWith("yf"));
+  const yahooIds = ids.filter((id) => id.startsWith("yf"));
+  const [tencentQuotes, yahooQuotes] = await Promise.all([
+    getTencentQuotes(tencentIds),
+    Promise.all(yahooIds.map(getYahooQuote))
+  ]);
+  const quoteMap = new Map([...tencentQuotes, ...yahooQuotes].map((quote) => [quote.secid, quote]));
+  return ids.map((id) => quoteMap.get(id)).filter(Boolean);
 }
 
 async function searchSymbols(keyword) {
   const query = String(keyword || "").trim();
   if (!query) return [];
-  const { stdout } = await execFileAsync("curl", [
-    "-sS",
-    "-L",
-    "--max-time",
-    "10",
-    "-H",
-    "Referer: https://finance.sina.com.cn",
-    `https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15&key=${encodeURIComponent(query)}`
-  ], { encoding: "binary", maxBuffer: 1024 * 1024 });
-  const text = new TextDecoder("gb18030").decode(Buffer.from(stdout, "binary"));
-  const content = text.match(/suggestvalue="([^"]*)"/)?.[1] || "";
-  return content.split(";").map((row) => {
+  const localResults = globalCatalog.filter((item) => {
+    const haystack = `${item.name} ${item.code} ${item.symbol}`.toLowerCase();
+    return haystack.includes(query.toLowerCase());
+  }).map((item) => ({ ...item, secid: item.symbol }));
+  let content = "";
+  try {
+    const { stdout } = await execFileAsync("curl", [
+      "-sS",
+      "-L",
+      "--max-time",
+      "10",
+      "-H",
+      "Referer: https://finance.sina.com.cn",
+      `https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15&key=${encodeURIComponent(query)}`
+    ], { encoding: "binary", maxBuffer: 1024 * 1024 });
+    const text = new TextDecoder("gb18030").decode(Buffer.from(stdout, "binary"));
+    content = text.match(/suggestvalue="([^"]*)"/)?.[1] || "";
+  } catch {
+    // Keep the built-in global index catalog available if remote search fails.
+  }
+  const chinaResults = content.split(";").map((row) => {
     const fields = row.split(",");
     const marketCode = fields[3] || "";
     if (!/^(sh|sz)\d{6}$/.test(marketCode)) return null;
-    const market = marketCode.startsWith("sh") ? "1" : "0";
     return {
       name: fields[0],
       code: fields[2],
-      secid: `${market}.${fields[2]}`,
-      market: market === "1" ? "沪" : "深",
+      secid: marketCode,
+      market: marketCode.startsWith("sh") ? "沪" : "深",
       symbol: marketCode
     };
-  }).filter(Boolean).slice(0, 12);
+  }).filter(Boolean);
+  const merged = [...localResults, ...chinaResults];
+  return merged.filter((item, index) =>
+    merged.findIndex((candidate) => candidate.symbol === item.symbol) === index
+  ).slice(0, 12);
 }
 
 async function getEastmoneyKlines(secid, limit = 260, klt = "101") {
-  const id = normalizeSecid(secid);
+  const symbol = normalizeSymbol(secid);
+  const id = symbolToSecid(symbol);
+  if (!id) throw new Error("No Eastmoney fallback for this market");
   const url = new URL("https://push2his.eastmoney.com/api/qt/stock/kline/get");
   url.search = new URLSearchParams({
     secid: id,
@@ -184,7 +282,7 @@ async function getEastmoneyKlines(secid, limit = 260, klt = "101") {
   }).toString();
   const json = await fetchJson(url);
   return {
-    secid: id,
+    secid: symbol,
     code: json.data?.code,
     name: json.data?.name,
     klines: (json.data?.klines || []).map(parseKline)
@@ -192,17 +290,15 @@ async function getEastmoneyKlines(secid, limit = 260, klt = "101") {
 }
 
 async function getTencentKlines(secid, limit = 260) {
-  const id = normalizeSecid(secid);
-  const sinaCode = secidToSina(id);
-  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${sinaCode},day,,,${limit},qfq`;
+  const symbol = normalizeSymbol(secid);
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=${symbol},day,,,${limit}`;
   const json = await fetchJson(url);
-  const block = json.data?.[sinaCode] || {};
-  const rows = block.qfqday || block.day || [];
-  const [, code] = id.split(".");
+  const block = Object.values(json.data || {})[0] || {};
+  const rows = block.day || block.qfqday || [];
   return {
-    secid: id,
-    code,
-    name: code,
+    secid: symbol,
+    code: symbol.slice(2),
+    name: symbol,
     klines: rows.map(([date, open, close, high, low, volume]) => ({
       date,
       open: Number(open),
@@ -219,14 +315,50 @@ async function getTencentKlines(secid, limit = 260) {
   };
 }
 
+async function getYahooKlines(secid, limit = 260) {
+  const symbol = normalizeSymbol(secid);
+  const yahooSymbol = yahooSymbols[symbol];
+  const json = await fetchJson(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=2y&interval=1d`);
+  const result = json.chart?.result?.[0];
+  const timestamps = result?.timestamp || [];
+  const quote = result?.indicators?.quote?.[0] || {};
+  const rows = timestamps.map((timestamp, index) => ({
+    date: new Date(timestamp * 1000).toISOString().slice(0, 10),
+    open: Number(quote.open?.[index]),
+    close: Number(quote.close?.[index]),
+    high: Number(quote.high?.[index]),
+    low: Number(quote.low?.[index]),
+    volume: Number(quote.volume?.[index]) || 0,
+    amount: null,
+    amplitude: null,
+    pct: null,
+    change: null,
+    turnover: null
+  })).filter((row) => Number.isFinite(row.close));
+  return {
+    secid: symbol,
+    code: yahooSymbol.replace("^", ""),
+    name: globalCatalog.find((item) => item.symbol === symbol)?.name || yahooSymbol,
+    klines: rows.slice(-limit)
+  };
+}
+
 async function getKlines(secid, limit = 260) {
+  if (normalizeSymbol(secid).startsWith("yf")) {
+    return getYahooKlines(secid, limit);
+  }
   try {
     const data = await getTencentKlines(secid, limit);
     if (data.klines.length) return data;
   } catch {
     // Fall through to Eastmoney as a backup because either source may throttle.
   }
-  return getEastmoneyKlines(secid, limit);
+  try {
+    return await getEastmoneyKlines(secid, limit);
+  } catch {
+    const symbol = normalizeSymbol(secid);
+    return { secid: symbol, code: symbol.slice(2), name: symbol, klines: [] };
+  }
 }
 
 async function getMarketSnapshot() {
@@ -284,13 +416,12 @@ async function routeApi(req, res, url) {
       return send(res, 200, JSON.stringify({ ok: true, data: await searchSymbols(keyword) }));
     }
     if (url.pathname === "/api/batch") {
-      const secids = (url.searchParams.get("secids") || defaultSymbols.join(",")).split(",").map(normalizeSecid).filter(Boolean);
-      const [quotes, marketResult, ...klines] = await Promise.all([
+      const secids = (url.searchParams.get("secids") || defaultSymbols.join(",")).split(",").map(normalizeSymbol).filter(Boolean);
+      const [quotes, ...klines] = await Promise.all([
         getQuotes(secids),
-        getMarketSnapshot().catch(() => null),
         ...secids.map((id) => getKlines(id))
       ]);
-      const market = marketResult || {
+      const market = {
         sample: true,
         total: quotes.length,
         up: quotes.filter((q) => q.pct > 0).length,
@@ -298,7 +429,7 @@ async function routeApi(req, res, url) {
         flat: quotes.filter((q) => q.pct === 0).length,
         upRatio: quotes.length ? quotes.filter((q) => q.pct > 0).length / quotes.length : 0,
         amount: quotes.reduce((sum, q) => sum + (Number(q.amount) || 0), 0),
-        mainNetInflow: 0,
+        mainNetInflow: null,
         topGainers: quotes.slice().sort((a, b) => b.pct - a.pct).slice(0, 8)
       };
       return send(res, 200, JSON.stringify({ ok: true, data: { quotes, market, klines } }));
