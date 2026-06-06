@@ -13,6 +13,7 @@ const DEFAULT_WATCHLIST = [
   "yfGDAXI",
   "ukUKX",
   "yfBTCF",
+  "yfDXY",
   "yfBCOM",
   "yfGCF",
   "yfCLF",
