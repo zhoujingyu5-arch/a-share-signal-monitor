@@ -290,6 +290,17 @@ h1 {
   margin-top: 2px;
 }
 
+.quoteTime {
+  margin-top: 3px;
+  color: #858d86;
+  font-size: 11px;
+}
+
+.quoteTime.stale {
+  color: var(--amber);
+  font-weight: 650;
+}
+
 .price {
   text-align: right;
 }

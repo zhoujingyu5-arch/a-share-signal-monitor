@@ -73,6 +73,7 @@ const globalCatalog = [
   { name: "大豆连续期货", code: "ZS=F", symbol: "yfZSF", market: "农产品" }
 ];
 const yahooSymbols = {
+  ukUKX: "^FTSE",
   yfN225: "^N225",
   yfKS11: "^KS11",
   yfGDAXI: "^GDAXI",
@@ -174,6 +175,40 @@ function parseKline(row) {
   };
 }
 
+function quoteDate(quoteTime = "") {
+  const text = String(quoteTime);
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const compact = text.match(/^(\d{4})(\d{2})(\d{2})/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  const slashed = text.match(/^(\d{4})\/(\d{2})\/(\d{2})/);
+  if (slashed) return `${slashed[1]}-${slashed[2]}-${slashed[3]}`;
+  return "";
+}
+
+function mergeLatestQuote(klineData, quote, limit = 260) {
+  const rows = klineData.klines || [];
+  const date = quoteDate(quote?.quoteTime);
+  const lastDate = rows.at(-1)?.date || "";
+  if (!date || !Number.isFinite(Number(quote?.price)) || date <= lastDate) return klineData;
+  return {
+    ...klineData,
+    klines: [...rows, {
+      date,
+      open: Number(quote.open) || Number(quote.price),
+      close: Number(quote.price),
+      high: Number(quote.high) || Number(quote.price),
+      low: Number(quote.low) || Number(quote.price),
+      volume: Number(quote.volume) || 0,
+      amount: Number(quote.amount) || null,
+      amplitude: null,
+      pct: Number(quote.pct),
+      change: Number(quote.change),
+      turnover: null
+    }].slice(-limit)
+  };
+}
+
 async function getTencentQuotes(ids) {
   if (!ids.length) return [];
   const { stdout } = await execFileAsync("curl", [
@@ -221,9 +256,32 @@ async function getYahooQuote(symbol) {
   const json = await fetchJson(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`);
   const result = json.chart?.result?.[0];
   const meta = result?.meta || {};
-  const closes = (result?.indicators?.quote?.[0]?.close || []).filter((value) => Number.isFinite(Number(value))).map(Number);
-  const price = closes.at(-1) ?? Number(meta.regularMarketPrice);
-  const previousClose = closes.at(-2) ?? Number(meta.previousClose || meta.chartPreviousClose);
+  const timestamps = result?.timestamp || [];
+  const quote = result?.indicators?.quote?.[0] || {};
+  const allPoints = (quote.close || []).map((value, index) => ({
+    close: value === null || value === undefined ? null : Number(value),
+    open: quote.open?.[index] === null || quote.open?.[index] === undefined ? null : Number(quote.open[index]),
+    high: quote.high?.[index] === null || quote.high?.[index] === undefined ? null : Number(quote.high[index]),
+    low: quote.low?.[index] === null || quote.low?.[index] === undefined ? null : Number(quote.low[index]),
+    volume: quote.volume?.[index] === null || quote.volume?.[index] === undefined ? null : Number(quote.volume[index]),
+    timestamp: timestamps[index]
+  }));
+  const points = allPoints.filter((point) => Number.isFinite(point.close));
+  const latest = points.at(-1);
+  const previous = points.at(-2);
+  const finalPoint = allPoints.at(-1);
+  const metaPrice = Number(meta.regularMarketPrice);
+  const metaTimestamp = Number(meta.regularMarketTime);
+  const newestChartTimestamp = Number(finalPoint?.timestamp || latest?.timestamp || 0);
+  const metaIsCurrent = Number.isFinite(metaPrice) && metaPrice > 0 &&
+    Number.isFinite(metaTimestamp) && Math.abs(metaTimestamp - newestChartTimestamp) <= 60 * 60 * 48;
+  const chartHasLatestClose = Number.isFinite(finalPoint?.close);
+  const useMetaPrice = !chartHasLatestClose && metaIsCurrent;
+  const price = useMetaPrice ? metaPrice : latest?.close;
+  const previousClose = useMetaPrice ? latest?.close : previous?.close;
+  if (!Number.isFinite(price) || !Number.isFinite(previousClose)) {
+    throw new Error(`Invalid quote data for ${yahooSymbol}`);
+  }
   const change = price - previousClose;
   return {
     secid: symbol,
@@ -233,16 +291,16 @@ async function getYahooQuote(symbol) {
     price,
     pct: previousClose ? (change / previousClose) * 100 : 0,
     change,
-    volume: Number(meta.regularMarketVolume) || 0,
+    volume: useMetaPrice ? (Number(meta.regularMarketVolume) || latest?.volume || 0) : (latest?.volume || 0),
     amount: 0,
-    high: Number(meta.regularMarketDayHigh) || price,
-    low: Number(meta.regularMarketDayLow) || price,
-    open: Number(meta.regularMarketOpen) || price,
+    high: useMetaPrice ? (Number(meta.regularMarketDayHigh) || price) : (latest?.high ?? price),
+    low: useMetaPrice ? (Number(meta.regularMarketDayLow) || price) : (latest?.low ?? price),
+    open: useMetaPrice ? (Number(meta.regularMarketOpen) || price) : (latest?.open ?? price),
     previousClose,
     totalMarketValue: null,
     floatMarketValue: null,
     mainNetInflow: null,
-    quoteTime: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : ""
+    quoteTime: new Date((useMetaPrice ? metaTimestamp : latest.timestamp) * 1000).toISOString()
   };
 }
 
@@ -345,7 +403,7 @@ async function getTencentKlines(secid, limit = 260) {
       pct: null,
       change: null,
       turnover: null
-    }))
+    })).slice(-limit)
   };
 }
 
@@ -356,19 +414,23 @@ async function getYahooKlines(secid, limit = 260) {
   const result = json.chart?.result?.[0];
   const timestamps = result?.timestamp || [];
   const quote = result?.indicators?.quote?.[0] || {};
-  const rows = timestamps.map((timestamp, index) => ({
-    date: new Date(timestamp * 1000).toISOString().slice(0, 10),
-    open: Number(quote.open?.[index]),
-    close: Number(quote.close?.[index]),
-    high: Number(quote.high?.[index]),
-    low: Number(quote.low?.[index]),
-    volume: Number(quote.volume?.[index]) || 0,
-    amount: null,
-    amplitude: null,
-    pct: null,
-    change: null,
-    turnover: null
-  })).filter((row) => Number.isFinite(row.close));
+  const rows = timestamps.map((timestamp, index) => {
+    const closeValue = quote.close?.[index];
+    if (closeValue === null || closeValue === undefined || !Number.isFinite(Number(closeValue))) return null;
+    return {
+      date: new Date(timestamp * 1000).toISOString().slice(0, 10),
+      open: quote.open?.[index] === null || quote.open?.[index] === undefined ? Number(closeValue) : Number(quote.open[index]),
+      close: Number(closeValue),
+      high: quote.high?.[index] === null || quote.high?.[index] === undefined ? Number(closeValue) : Number(quote.high[index]),
+      low: quote.low?.[index] === null || quote.low?.[index] === undefined ? Number(closeValue) : Number(quote.low[index]),
+      volume: quote.volume?.[index] === null || quote.volume?.[index] === undefined ? 0 : Number(quote.volume[index]),
+      amount: null,
+      amplitude: null,
+      pct: null,
+      change: null,
+      turnover: null
+    };
+  }).filter(Boolean);
   return {
     secid: symbol,
     code: yahooSymbol.replace("^", ""),
@@ -378,7 +440,7 @@ async function getYahooKlines(secid, limit = 260) {
 }
 
 async function getKlines(secid, limit = 260) {
-  if (normalizeSymbol(secid).startsWith("yf")) {
+  if (yahooSymbols[normalizeSymbol(secid)]) {
     return getYahooKlines(secid, limit);
   }
   try {
@@ -455,6 +517,8 @@ async function routeApi(req, res, url) {
         getQuotes(secids),
         ...secids.map((id) => getKlines(id))
       ]);
+      const quoteMap = new Map(quotes.map((quote) => [quote.secid, quote]));
+      const mergedKlines = klines.map((item) => mergeLatestQuote(item, quoteMap.get(item.secid)));
       const market = {
         sample: true,
         total: quotes.length,
@@ -466,7 +530,7 @@ async function routeApi(req, res, url) {
         mainNetInflow: null,
         topGainers: quotes.slice().sort((a, b) => b.pct - a.pct).slice(0, 8)
       };
-      return send(res, 200, JSON.stringify({ ok: true, data: { quotes, market, klines } }));
+      return send(res, 200, JSON.stringify({ ok: true, data: { quotes, market, klines: mergedKlines } }));
     }
     send(res, 404, JSON.stringify({ ok: false, error: "Unknown API route" }));
   } catch (error) {

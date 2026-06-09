@@ -151,6 +151,25 @@ function fmtMoney(value) {
   return n.toFixed(0);
 }
 
+function fmtQuoteTime(value) {
+  if (!value) return "时间未知";
+  const text = String(value);
+  const compact = text.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]} ${compact[4]}:${compact[5]}`;
+  return text.replace("T", " ").replace(".000Z", " UTC");
+}
+
+function isQuoteStale(value) {
+  if (!value) return true;
+  const text = String(value);
+  const compact = text.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/);
+  const normalized = compact
+    ? `${compact[1]}-${compact[2]}-${compact[3]}T${compact[4]}:${compact[5]}:00`
+    : text.replaceAll("/", "-").replace(" ", "T");
+  const timestamp = Date.parse(normalized);
+  return !Number.isFinite(timestamp) || Date.now() - timestamp > 30 * 60 * 60 * 1000;
+}
+
 function ema(values, period) {
   const k = 2 / (period + 1);
   const out = [];
@@ -488,12 +507,14 @@ function renderSignals(quotes, klines) {
     const slopeText = analysis.slope20 === null ? "--" : `${analysis.slope20 >= 0 ? "+" : ""}${fmtNumber(analysis.slope20)}%`;
     const volumeText = analysis.volumeRatio === null ? "--" : `${fmtNumber(analysis.volumeRatio)}x`;
     const rangeText = analysis.rangePosition === null ? "--" : `${fmtNumber(analysis.rangePosition, 0)}%`;
+    const stale = isQuoteStale(quote.quoteTime);
     return `
       <article class="card">
         <div class="cardHead">
           <div>
             <div class="name">${quote.name || payload.name || payload.code}</div>
             <div class="code">${payload.secid}</div>
+            <div class="quoteTime${stale ? " stale" : ""}">数据 ${fmtQuoteTime(quote.quoteTime)}${stale ? " · 可能延迟" : ""}</div>
           </div>
           <div class="price">
             <strong>${fmtNumber(quote.price || analysis.close)}</strong>
