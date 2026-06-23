@@ -142,6 +142,16 @@ function fmtNumber(value, digits = 2) {
   return Number(value).toFixed(digits);
 }
 
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;"
+  }[char]));
+}
+
 function fmtMoney(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "--";
@@ -508,6 +518,7 @@ function renderSignals(quotes, klines) {
     const volumeText = analysis.volumeRatio === null ? "--" : `${fmtNumber(analysis.volumeRatio)}x`;
     const rangeText = analysis.rangePosition === null ? "--" : `${fmtNumber(analysis.rangePosition, 0)}%`;
     const stale = isQuoteStale(quote.quoteTime);
+    const sourceIssue = quote.sourceError || payload.sourceError;
     return `
       <article class="card">
         <div class="cardHead">
@@ -521,6 +532,7 @@ function renderSignals(quotes, klines) {
             <span class="${pctClass}">${fmtNumber(quote.pct)}%</span>
           </div>
         </div>
+        ${sourceIssue ? `<p class="sourceError">数据源暂不可用：${escapeHtml(sourceIssue)}</p>` : ""}
         <div class="phase">
           <div>
             <span class="systemStage">${analysis.systemStage}</span>
@@ -554,7 +566,13 @@ async function refresh() {
   els.lastUpdate.textContent = "刷新中...";
   try {
     const response = await fetch(`/api/batch?secids=${encodeURIComponent(watchlist.join(","))}`);
-    const json = await response.json();
+    const text = await response.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`接口没有返回JSON：${text.slice(0, 40).replace(/\s+/g, " ")}`);
+    }
     if (!json.ok) throw new Error(json.error || "刷新失败");
     renderMarket(json.data.market);
     renderSignals(json.data.quotes, json.data.klines);

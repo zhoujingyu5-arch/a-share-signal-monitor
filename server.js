@@ -9,6 +9,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 5173);
 const execFileAsync = promisify(execFile);
+const yahooCache = new Map();
+const yahooCacheMs = 5 * 60 * 1000;
+const yahooFailureCacheMs = 45 * 1000;
+const yahooRequestGapMs = 800;
+let yahooQueue = Promise.resolve();
+let lastYahooRequestAt = 0;
 
 const defaultSymbols = [
   "sh000001",
@@ -133,29 +139,127 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
   res.end(body);
 }
 
-async function fetchJson(url) {
+async function fetchJson(url, options = {}) {
+  const maxTime = String(options.maxTime || 12);
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const { stdout } = await execFileAsync("curl", [
         "-sS",
         "-L",
+        "--compressed",
         "--retry",
         "1",
         "--max-time",
-        "12",
+        maxTime,
         "-H",
         "Accept: application/json,text/plain,*/*",
         "-H",
-        "User-Agent: Mozilla/5.0 AShareSignalMonitor/1.0",
+        "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
         String(url).replaceAll("%2C", ",")
       ], { maxBuffer: 8 * 1024 * 1024 });
+      const text = String(stdout || "").trimStart();
+      if (!/^[\[{]/.test(text)) {
+        throw new Error(`Non-JSON response from ${url}: ${text.slice(0, 90).replace(/\s+/g, " ")}`);
+      }
       return JSON.parse(stdout);
     } catch (error) {
       lastError = error;
     }
   }
   throw lastError;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function runYahooRequest(task) {
+  const run = yahooQueue.then(async () => {
+    const waitMs = Math.max(0, yahooRequestGapMs - (Date.now() - lastYahooRequestAt));
+    if (waitMs) await sleep(waitMs);
+    lastYahooRequestAt = Date.now();
+    return task();
+  });
+  yahooQueue = run.catch(() => {});
+  return run;
+}
+
+async function fetchYahooChart(yahooSymbol, query) {
+  const encoded = encodeURIComponent(yahooSymbol);
+  const hosts = ["query2.finance.yahoo.com", "query1.finance.yahoo.com"];
+  const cacheKey = `${yahooSymbol}?${query}`;
+  const cached = yahooCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    if (cached.error) throw new Error(cached.error);
+    return cached.data;
+  }
+  let lastError;
+  for (const host of hosts) {
+    try {
+      const data = await runYahooRequest(() => fetchJson(`https://${host}/v8/finance/chart/${encoded}?${query}`, { maxTime: 5 }));
+      yahooCache.set(cacheKey, { data, expiresAt: Date.now() + yahooCacheMs });
+      return data;
+    } catch (error) {
+      lastError = error;
+      if (String(error?.message || error).includes("Too Many Requests")) break;
+    }
+  }
+  yahooCache.set(cacheKey, { error: compactError(lastError), expiresAt: Date.now() + yahooFailureCacheMs });
+  throw lastError;
+}
+
+function catalogItem(symbol) {
+  return globalCatalog.find((item) => item.symbol === symbol);
+}
+
+function compactError(error) {
+  return String(error?.message || error || "数据源不可用").slice(0, 140);
+}
+
+function placeholderQuote(secid, error) {
+  const symbol = normalizeSymbol(secid);
+  const item = catalogItem(symbol);
+  return {
+    secid: symbol,
+    code: item?.code || symbol.slice(2),
+    market: item?.market || symbol.slice(0, 2),
+    name: item?.name || symbol,
+    price: null,
+    pct: null,
+    change: null,
+    volume: null,
+    amount: 0,
+    high: null,
+    low: null,
+    open: null,
+    previousClose: null,
+    totalMarketValue: null,
+    floatMarketValue: null,
+    mainNetInflow: null,
+    quoteTime: "",
+    sourceError: compactError(error)
+  };
+}
+
+function placeholderKlines(secid, error) {
+  const symbol = normalizeSymbol(secid);
+  const item = catalogItem(symbol);
+  return {
+    secid: symbol,
+    code: item?.code || symbol.slice(2),
+    name: item?.name || symbol,
+    klines: [],
+    sourceError: compactError(error)
+  };
 }
 
 function parseKline(row) {
@@ -253,7 +357,7 @@ async function getTencentQuotes(ids) {
 
 async function getYahooQuote(symbol) {
   const yahooSymbol = yahooSymbols[symbol];
-  const json = await fetchJson(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`);
+  const json = await fetchYahooChart(yahooSymbol, "range=5d&interval=1d");
   const result = json.chart?.result?.[0];
   const meta = result?.meta || {};
   const timestamps = result?.timestamp || [];
@@ -287,7 +391,7 @@ async function getYahooQuote(symbol) {
     secid: symbol,
     code: yahooSymbol.replace("^", ""),
     market: "yf",
-    name: globalCatalog.find((item) => item.symbol === symbol)?.name || meta.shortName || yahooSymbol,
+    name: catalogItem(symbol)?.name || meta.shortName || yahooSymbol,
     price,
     pct: previousClose ? (change / previousClose) * 100 : 0,
     change,
@@ -306,11 +410,14 @@ async function getYahooQuote(symbol) {
 
 async function getQuotes(secids) {
   const ids = secids.map(normalizeSymbol).filter(Boolean);
-  const tencentIds = ids.filter((id) => !id.startsWith("yf"));
-  const yahooIds = ids.filter((id) => id.startsWith("yf"));
+  const tencentIds = ids.filter((id) => !yahooSymbols[id]);
+  const yahooIds = ids.filter((id) => yahooSymbols[id]);
   const [tencentQuotes, yahooQuotes] = await Promise.all([
-    getTencentQuotes(tencentIds),
-    Promise.all(yahooIds.map(getYahooQuote))
+    getTencentQuotes(tencentIds).catch((error) => tencentIds.map((id) => placeholderQuote(id, error))),
+    Promise.all(yahooIds.map((id) => (
+      withTimeout(getYahooQuote(id), 12000, `Yahoo quote timeout for ${id}`)
+        .catch((error) => placeholderQuote(id, error))
+    )))
   ]);
   const quoteMap = new Map([...tencentQuotes, ...yahooQuotes].map((quote) => [quote.secid, quote]));
   return ids.map((id) => quoteMap.get(id)).filter(Boolean);
@@ -410,7 +517,7 @@ async function getTencentKlines(secid, limit = 260) {
 async function getYahooKlines(secid, limit = 260) {
   const symbol = normalizeSymbol(secid);
   const yahooSymbol = yahooSymbols[symbol];
-  const json = await fetchJson(`https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=2y&interval=1d`);
+  const json = await fetchYahooChart(yahooSymbol, "range=2y&interval=1d");
   const result = json.chart?.result?.[0];
   const timestamps = result?.timestamp || [];
   const quote = result?.indicators?.quote?.[0] || {};
@@ -434,14 +541,15 @@ async function getYahooKlines(secid, limit = 260) {
   return {
     secid: symbol,
     code: yahooSymbol.replace("^", ""),
-    name: globalCatalog.find((item) => item.symbol === symbol)?.name || yahooSymbol,
+    name: catalogItem(symbol)?.name || yahooSymbol,
     klines: rows.slice(-limit)
   };
 }
 
 async function getKlines(secid, limit = 260) {
-  if (yahooSymbols[normalizeSymbol(secid)]) {
-    return getYahooKlines(secid, limit);
+  const symbol = normalizeSymbol(secid);
+  if (yahooSymbols[symbol]) {
+    return getYahooKlines(symbol, limit).catch((error) => placeholderKlines(symbol, error));
   }
   try {
     const data = await getTencentKlines(secid, limit);
@@ -452,7 +560,6 @@ async function getKlines(secid, limit = 260) {
   try {
     return await getEastmoneyKlines(secid, limit);
   } catch {
-    const symbol = normalizeSymbol(secid);
     return { secid: symbol, code: symbol.slice(2), name: symbol, klines: [] };
   }
 }
@@ -515,20 +622,24 @@ async function routeApi(req, res, url) {
       const secids = (url.searchParams.get("secids") || defaultSymbols.join(",")).split(",").map(normalizeSymbol).filter(Boolean);
       const [quotes, ...klines] = await Promise.all([
         getQuotes(secids),
-        ...secids.map((id) => getKlines(id))
+        ...secids.map((id) => (
+          withTimeout(getKlines(id), yahooSymbols[id] ? 16000 : 18000, `Kline timeout for ${id}`)
+            .catch((error) => placeholderKlines(id, error))
+        ))
       ]);
       const quoteMap = new Map(quotes.map((quote) => [quote.secid, quote]));
       const mergedKlines = klines.map((item) => mergeLatestQuote(item, quoteMap.get(item.secid)));
+      const tradableQuotes = quotes.filter((q) => Number.isFinite(Number(q.pct)));
       const market = {
         sample: true,
         total: quotes.length,
-        up: quotes.filter((q) => q.pct > 0).length,
-        down: quotes.filter((q) => q.pct < 0).length,
-        flat: quotes.filter((q) => q.pct === 0).length,
-        upRatio: quotes.length ? quotes.filter((q) => q.pct > 0).length / quotes.length : 0,
+        up: tradableQuotes.filter((q) => q.pct > 0).length,
+        down: tradableQuotes.filter((q) => q.pct < 0).length,
+        flat: quotes.length - tradableQuotes.filter((q) => q.pct > 0 || q.pct < 0).length,
+        upRatio: tradableQuotes.length ? tradableQuotes.filter((q) => q.pct > 0).length / tradableQuotes.length : 0,
         amount: quotes.reduce((sum, q) => sum + (Number(q.amount) || 0), 0),
         mainNetInflow: null,
-        topGainers: quotes.slice().sort((a, b) => b.pct - a.pct).slice(0, 8)
+        topGainers: tradableQuotes.slice().sort((a, b) => b.pct - a.pct).slice(0, 8)
       };
       return send(res, 200, JSON.stringify({ ok: true, data: { quotes, market, klines: mergedKlines } }));
     }
