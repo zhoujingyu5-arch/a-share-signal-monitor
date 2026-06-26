@@ -1,5 +1,5 @@
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,8 +7,10 @@ import { promisify } from "node:util";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
+const cacheFile = path.join(__dirname, ".signal-cache.json");
 const port = Number(process.env.PORT || 5173);
 const execFileAsync = promisify(execFile);
+const dataCache = { quotes: {}, klines: {} };
 const yahooCache = new Map();
 const yahooCacheMs = 5 * 60 * 1000;
 const yahooFailureCacheMs = 45 * 1000;
@@ -96,6 +98,25 @@ const yahooSymbols = {
   yfZWF: "ZW=F",
   yfZSF: "ZS=F"
 };
+const eastmoneyGlobalSymbols = {
+  yfN225: "100.N225",
+  yfKS11: "100.KS11",
+  yfGDAXI: "100.GDAXI",
+  ukUKX: "100.FTSE",
+  yfDXY: "100.UDI",
+  yfBTCF: "107.BITO",
+  yfGCF: "101.GC00Y",
+  yfCLF: "102.CL00Y",
+  yfHGF: "101.HG00Y"
+};
+const sinaGlobalSymbols = {
+  yfN225: "int_nikkei",
+  ukUKX: "int_ftse",
+  yfGCF: "hf_GC",
+  yfCLF: "hf_CL",
+  yfHGF: "hf_CAD",
+  yfSIF: "hf_SI"
+};
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -103,6 +124,14 @@ const mime = {
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml"
 };
+
+try {
+  const savedCache = JSON.parse(await readFile(cacheFile, "utf8"));
+  dataCache.quotes = savedCache.quotes || {};
+  dataCache.klines = savedCache.klines || {};
+} catch {
+  // The cache is optional; it is created after the first successful refresh.
+}
 
 function normalizeSymbol(input = "") {
   const raw = String(input).trim();
@@ -170,6 +199,28 @@ async function fetchJson(url, options = {}) {
   throw lastError;
 }
 
+async function fetchText(url, options = {}) {
+  const maxTime = String(options.maxTime || 8);
+  const args = [
+    "-sS",
+    "-L",
+    "--compressed",
+    "--retry",
+    "1",
+    "--max-time",
+    maxTime,
+    "-H",
+    "Accept: text/plain,*/*",
+    "-H",
+    "Referer: https://finance.sina.com.cn/",
+    "-H",
+    "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+    String(url)
+  ];
+  const { stdout } = await execFileAsync("curl", args, { encoding: "binary", maxBuffer: 2 * 1024 * 1024 });
+  return new TextDecoder("gb18030").decode(Buffer.from(stdout, "binary"));
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -225,8 +276,38 @@ function compactError(error) {
   return String(error?.message || error || "数据源不可用").slice(0, 140);
 }
 
+let cacheSaveTimer = null;
+
+function saveDataCacheSoon() {
+  clearTimeout(cacheSaveTimer);
+  cacheSaveTimer = setTimeout(() => {
+    writeFile(cacheFile, JSON.stringify(dataCache, null, 2)).catch(() => {});
+  }, 250);
+}
+
+function markCached(record, error) {
+  return {
+    ...record,
+    sourceError: `实时源暂不可用，已使用本地缓存：${compactError(error)}`,
+    cached: true
+  };
+}
+
+function cacheQuote(quote) {
+  if (!quote?.secid || quote.sourceError || !Number.isFinite(Number(quote.price))) return;
+  dataCache.quotes[quote.secid] = { ...quote, cachedAt: new Date().toISOString() };
+  saveDataCacheSoon();
+}
+
+function cacheKlines(payload) {
+  if (!payload?.secid || payload.sourceError || !payload.klines?.length) return;
+  dataCache.klines[payload.secid] = { ...payload, cachedAt: new Date().toISOString() };
+  saveDataCacheSoon();
+}
+
 function placeholderQuote(secid, error) {
   const symbol = normalizeSymbol(secid);
+  if (dataCache.quotes[symbol]) return markCached(dataCache.quotes[symbol], error);
   const item = catalogItem(symbol);
   return {
     secid: symbol,
@@ -252,6 +333,7 @@ function placeholderQuote(secid, error) {
 
 function placeholderKlines(secid, error) {
   const symbol = normalizeSymbol(secid);
+  if (dataCache.klines[symbol]) return markCached(dataCache.klines[symbol], error);
   const item = catalogItem(symbol);
   return {
     secid: symbol,
@@ -355,6 +437,113 @@ async function getTencentQuotes(ids) {
   }).filter(Boolean);
 }
 
+function eastmoneyNumber(value, decimals = 2) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= -1000000) return null;
+  return raw / (10 ** Number(decimals || 2));
+}
+
+async function getSinaGlobalQuote(symbol) {
+  const code = sinaGlobalSymbols[symbol];
+  if (!code) throw new Error(`No Sina quote fallback for ${symbol}`);
+  const text = await fetchText(`https://hq.sinajs.cn/list=${code}`, { maxTime: 5 });
+  const match = text.match(/="([^"]*)"/);
+  const fields = match?.[1]?.split(",") || [];
+  if (!fields.length || !fields[0]) throw new Error(`Empty Sina quote for ${code}`);
+  const item = catalogItem(symbol);
+  if (code.startsWith("int_")) {
+    const price = Number(fields[1]);
+    const change = Number(fields[2]);
+    const pct = Number(fields[3]);
+    if (!Number.isFinite(price)) throw new Error(`Invalid Sina quote for ${code}`);
+    return {
+      secid: symbol,
+      code: item?.code || code,
+      market: "sina",
+      name: item?.name || fields[0] || symbol,
+      price,
+      pct: Number.isFinite(pct) ? pct : null,
+      change: Number.isFinite(change) ? change : null,
+      volume: null,
+      amount: 0,
+      high: null,
+      low: null,
+      open: null,
+      previousClose: Number.isFinite(change) ? price - change : null,
+      totalMarketValue: null,
+      floatMarketValue: null,
+      mainNetInflow: null,
+      quoteTime: new Date().toISOString(),
+      source: "新浪备用"
+    };
+  }
+  const price = Number(fields[0]);
+  const high = Number(fields[4]);
+  const low = Number(fields[5]);
+  const previousClose = Number(fields[7]);
+  const open = Number(fields[8]);
+  if (!Number.isFinite(price)) throw new Error(`Invalid Sina futures quote for ${code}`);
+  const change = Number.isFinite(previousClose) ? price - previousClose : null;
+  return {
+    secid: symbol,
+    code: item?.code || code,
+    market: "sina",
+    name: item?.name || fields[13] || symbol,
+    price,
+    pct: Number.isFinite(change) && previousClose ? (change / previousClose) * 100 : null,
+    change,
+    volume: Number(fields[14]) || null,
+    amount: 0,
+    high: Number.isFinite(high) ? high : null,
+    low: Number.isFinite(low) ? low : null,
+    open: Number.isFinite(open) ? open : null,
+    previousClose: Number.isFinite(previousClose) ? previousClose : null,
+    totalMarketValue: null,
+    floatMarketValue: null,
+    mainNetInflow: null,
+    quoteTime: fields[12] && fields[6] ? `${fields[12]} ${fields[6]}` : new Date().toISOString(),
+    source: "新浪备用"
+  };
+}
+
+async function getEastmoneyGlobalQuote(symbol) {
+  const secid = eastmoneyGlobalSymbols[symbol];
+  if (!secid) throw new Error(`No Eastmoney quote fallback for ${symbol}`);
+  const url = new URL("https://push2.eastmoney.com/api/qt/stock/get");
+  url.search = new URLSearchParams({
+    secid,
+    fields: "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f86,f169,f170"
+  }).toString();
+  const json = await fetchJson(url, { maxTime: 8 });
+  const row = json.data || {};
+  const decimals = Number(row.f59) || 2;
+  const price = eastmoneyNumber(row.f43, decimals);
+  const previousClose = eastmoneyNumber(row.f60, decimals);
+  if (!Number.isFinite(price) || !Number.isFinite(previousClose)) {
+    throw new Error(`Invalid Eastmoney quote for ${secid}`);
+  }
+  return {
+    secid: symbol,
+    code: row.f57 || secid.split(".")[1],
+    market: "em",
+    name: catalogItem(symbol)?.name || row.f58 || symbol,
+    price,
+    pct: eastmoneyNumber(row.f170, 2),
+    change: eastmoneyNumber(row.f169, decimals),
+    volume: Number(row.f47) || 0,
+    amount: Number(row.f48) || 0,
+    high: eastmoneyNumber(row.f44, decimals),
+    low: eastmoneyNumber(row.f45, decimals),
+    open: eastmoneyNumber(row.f46, decimals),
+    previousClose,
+    totalMarketValue: null,
+    floatMarketValue: null,
+    mainNetInflow: null,
+    quoteTime: row.f86 ? String(row.f86) : "",
+    source: "东方财富备用"
+  };
+}
+
 async function getYahooQuote(symbol) {
   const yahooSymbol = yahooSymbols[symbol];
   const json = await fetchYahooChart(yahooSymbol, "range=5d&interval=1d");
@@ -408,6 +597,22 @@ async function getYahooQuote(symbol) {
   };
 }
 
+async function getGlobalQuote(symbol) {
+  try {
+    return await getSinaGlobalQuote(symbol);
+  } catch (sinaError) {
+    try {
+    return await getEastmoneyGlobalQuote(symbol);
+    } catch (eastmoneyError) {
+      try {
+        return await getYahooQuote(symbol);
+      } catch (yahooError) {
+        throw new Error(`${compactError(sinaError)}；${compactError(eastmoneyError)}；${compactError(yahooError)}`);
+      }
+    }
+  }
+}
+
 async function getQuotes(secids) {
   const ids = secids.map(normalizeSymbol).filter(Boolean);
   const tencentIds = ids.filter((id) => !yahooSymbols[id]);
@@ -415,12 +620,14 @@ async function getQuotes(secids) {
   const [tencentQuotes, yahooQuotes] = await Promise.all([
     getTencentQuotes(tencentIds).catch((error) => tencentIds.map((id) => placeholderQuote(id, error))),
     Promise.all(yahooIds.map((id) => (
-      withTimeout(getYahooQuote(id), 12000, `Yahoo quote timeout for ${id}`)
+      withTimeout(getGlobalQuote(id), 6500, `Global quote timeout for ${id}`)
         .catch((error) => placeholderQuote(id, error))
     )))
   ]);
   const quoteMap = new Map([...tencentQuotes, ...yahooQuotes].map((quote) => [quote.secid, quote]));
-  return ids.map((id) => quoteMap.get(id)).filter(Boolean);
+  const result = ids.map((id) => quoteMap.get(id)).filter(Boolean);
+  result.forEach(cacheQuote);
+  return result;
 }
 
 async function searchSymbols(keyword) {
@@ -488,6 +695,32 @@ async function getEastmoneyKlines(secid, limit = 260, klt = "101") {
   };
 }
 
+async function getEastmoneyGlobalKlines(secid, limit = 260, klt = "101") {
+  const symbol = normalizeSymbol(secid);
+  const id = eastmoneyGlobalSymbols[symbol];
+  if (!id) throw new Error(`No Eastmoney global kline fallback for ${symbol}`);
+  const url = new URL("https://push2his.eastmoney.com/api/qt/stock/kline/get");
+  url.search = new URLSearchParams({
+    secid: id,
+    fields1: "f1,f2,f3,f4,f5,f6",
+    fields2: "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+    klt,
+    fqt: "1",
+    beg: "19900101",
+    end: "20500101",
+    lmt: String(limit)
+  }).toString();
+  const json = await fetchJson(url, { maxTime: 4 });
+  const rows = (json.data?.klines || []).map(parseKline);
+  if (!rows.length) throw new Error(`No Eastmoney global klines for ${id}`);
+  return {
+    secid: symbol,
+    code: json.data?.code || id.split(".")[1],
+    name: catalogItem(symbol)?.name || json.data?.name || symbol,
+    klines: rows
+  };
+}
+
 async function getTencentKlines(secid, limit = 260) {
   const symbol = normalizeSymbol(secid);
   const url = `https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=${symbol},day,,,${limit}`;
@@ -549,18 +782,41 @@ async function getYahooKlines(secid, limit = 260) {
 async function getKlines(secid, limit = 260) {
   const symbol = normalizeSymbol(secid);
   if (yahooSymbols[symbol]) {
-    return getYahooKlines(symbol, limit).catch((error) => placeholderKlines(symbol, error));
+    if (dataCache.klines[symbol]?.klines?.length) {
+      return markCached(dataCache.klines[symbol], "优先使用缓存，后台源短时不稳定");
+    }
+    try {
+      const data = await getEastmoneyGlobalKlines(symbol, limit);
+      cacheKlines(data);
+      return data;
+    } catch (eastmoneyError) {
+      if (eastmoneyGlobalSymbols[symbol]) {
+        return placeholderKlines(symbol, eastmoneyError);
+      }
+      try {
+        const data = await getYahooKlines(symbol, limit);
+        cacheKlines(data);
+        return data;
+      } catch (yahooError) {
+        return placeholderKlines(symbol, `${compactError(eastmoneyError)}；${compactError(yahooError)}`);
+      }
+    }
   }
   try {
     const data = await getTencentKlines(secid, limit);
-    if (data.klines.length) return data;
+    if (data.klines.length) {
+      cacheKlines(data);
+      return data;
+    }
   } catch {
     // Fall through to Eastmoney as a backup because either source may throttle.
   }
   try {
-    return await getEastmoneyKlines(secid, limit);
-  } catch {
-    return { secid: symbol, code: symbol.slice(2), name: symbol, klines: [] };
+    const data = await getEastmoneyKlines(secid, limit);
+    cacheKlines(data);
+    return data;
+  } catch (error) {
+    return placeholderKlines(symbol, error);
   }
 }
 
@@ -623,7 +879,7 @@ async function routeApi(req, res, url) {
       const [quotes, ...klines] = await Promise.all([
         getQuotes(secids),
         ...secids.map((id) => (
-          withTimeout(getKlines(id), yahooSymbols[id] ? 16000 : 18000, `Kline timeout for ${id}`)
+          withTimeout(getKlines(id), yahooSymbols[id] ? 6500 : 18000, `Kline timeout for ${id}`)
             .catch((error) => placeholderKlines(id, error))
         ))
       ]);
