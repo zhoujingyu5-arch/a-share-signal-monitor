@@ -217,7 +217,7 @@ function average(values) {
   return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : 0;
 }
 
-function detect2B(rows, close) {
+function detect2B(rows, close, bias120) {
   if (rows.length < 40) return { label: "无", tone: "neutral" };
   const prior = rows.slice(-40, -5);
   const recent = rows.slice(-5);
@@ -226,12 +226,53 @@ function detect2B(rows, close) {
   const recentLow = Math.min(...recent.map((row) => row.low));
   const recentHigh = Math.max(...recent.map((row) => row.high));
   if (recentLow < priorLow * 0.995 && close > priorLow) {
-    return { label: "底部2B回收", tone: "up" };
+    const prefix = bias120 <= -10 ? "负乖离后" : "低位";
+    return { label: `${prefix}底部2B回收`, tone: "up" };
   }
   if (recentHigh > priorHigh * 1.005 && close < priorHigh) {
-    return { label: "顶部2B回落", tone: "down" };
+    const prefix = bias120 >= 10 ? "正乖离后" : "高位";
+    return { label: `${prefix}顶部2B回落`, tone: "down" };
   }
   return { label: "无", tone: "neutral" };
+}
+
+function classifySlope(slope20, slopeChange, direction) {
+  if (!Number.isFinite(slope20) || !Number.isFinite(slopeChange)) {
+    return { label: "斜率不足", tone: "neutral", reversalCue: "等待斜率数据" };
+  }
+  const absSlope = Math.abs(slope20);
+  const absChange = Math.abs(slopeChange);
+  if (absSlope < 0.18) {
+    return { label: "斜率走平 / 转折酝酿", tone: "warn", reversalCue: "成本线接近不跌不涨" };
+  }
+  if (direction === "bull") {
+    if (slope20 > 0 && slopeChange > 0.35) {
+      return { label: "上行斜率加大 / 加速段", tone: "up", reversalCue: "若继续放量远离均线，进入极端观察" };
+    }
+    if (slope20 > 0 && slopeChange < -0.35) {
+      return { label: "上行斜率衰减", tone: "warn", reversalCue: "上涨拐头预警：看跌回EMA20" };
+    }
+    if (slope20 > 0) return { label: "上行斜率形成", tone: "up", reversalCue: "趋势仍由成本线上移确认" };
+  }
+  if (direction === "bear") {
+    if (slope20 < 0 && slopeChange < -0.35) {
+      return { label: "下行斜率加大 / 杀跌段", tone: "down", reversalCue: "若负乖离放大，进入回归观察" };
+    }
+    if (slope20 < 0 && slopeChange > 0.35) {
+      return { label: "下行斜率衰减", tone: "warn", reversalCue: "下跌拐头预警：看站回EMA20" };
+    }
+    if (slope20 < 0) return { label: "下行斜率形成", tone: "down", reversalCue: "趋势仍由成本线下移确认" };
+  }
+  return { label: slope20 > 0 ? "短线斜率向上" : "短线斜率向下", tone: slope20 > 0 ? "up" : "down", reversalCue: "方向与当前阶段仍需互相确认" };
+}
+
+function classifyCostLine(currentE20, currentE60, currentE120, e20, e60, e120, dense) {
+  const up = currentE20 > last(e20, 2) && currentE60 > last(e60, 2) && currentE120 >= last(e120, 2);
+  const down = currentE20 < last(e20, 2) && currentE60 < last(e60, 2) && currentE120 <= last(e120, 2);
+  if (dense) return { label: "成本密集 / 等待扩散", tone: "info" };
+  if (up) return { label: "成本整体上移", tone: "up" };
+  if (down) return { label: "成本整体下移", tone: "down" };
+  return { label: "成本线分歧", tone: "warn" };
 }
 
 function progressAt(index, direction, closes, highs, lows, e20, e60, e120) {
@@ -283,7 +324,12 @@ function analyzeKlines(payload, quote) {
       density: null,
       dense: false,
       deduction20: null,
+      deductionGap: null,
+      deductionText: "数据不足",
+      costState: { label: "等待成本线", tone: "neutral" },
+      slopeState: { label: "斜率不足", tone: "neutral", reversalCue: "等待斜率数据" },
       structure2B: { label: "无", tone: "neutral" },
+      turningClue: "等待历史数据补齐",
       rangePosition: null,
       humanState: "无法判断",
       riskReward: null,
@@ -319,7 +365,13 @@ function analyzeKlines(payload, quote) {
   const density = ((Math.max(currentE20, currentE60, currentE120) - Math.min(currentE20, currentE60, currentE120)) / close) * 100;
   const dense = density < 2.5;
   const deduction20 = closes.at(-20);
-  const structure2B = detect2B(rows, close);
+  const deductionGap = Number.isFinite(deduction20) && deduction20 ? ((close - deduction20) / deduction20) * 100 : null;
+  const deductionText = deductionGap === null
+    ? "数据不足"
+    : deductionGap >= 0
+      ? `高于抵扣价 ${fmtNumber(deductionGap)}%，MA20易维持上拐`
+      : `低于抵扣价 ${fmtNumber(Math.abs(deductionGap))}%，MA20承压`;
+  const structure2B = detect2B(rows, close, bias120);
   const rangePosition = high60 === low60 ? 50 : ((close - low60) / (high60 - low60)) * 100;
 
   const bullConditions = [
@@ -342,13 +394,16 @@ function analyzeKlines(payload, quote) {
   const bearScore = bearSteps.filter(Boolean).length;
   const dominantDirection = bullScore > bearScore ? "bull" : bearScore > bullScore ? "bear" : "none";
   const dominantScore = Math.max(bullScore, bearScore);
+  const slopeState = classifySlope(slope20, slopeChange, dominantDirection);
+  const costState = classifyCostLine(currentE20, currentE60, currentE120, e20, e60, e120, dense);
   let systemStage = dense ? "均线密集 / 行情准备" : "转折观察";
-  if (dominantScore === 1 || dominantScore === 2) systemStage = "转折";
-  if (dominantScore === 3) systemStage = "开始";
-  if (dominantScore === 4) systemStage = "发展";
-  if (dominantScore === 5) systemStage = "极端";
+  const directionText = dominantDirection === "bull" ? "上升" : dominantDirection === "bear" ? "下降" : "";
+  if (dominantScore === 1 || dominantScore === 2) systemStage = `${directionText}转折`;
+  if (dominantScore === 3) systemStage = `${directionText}开始`;
+  if (dominantScore === 4) systemStage = `${directionText}发展`;
+  if (dominantScore === 5) systemStage = `${directionText}极端`;
   if (dominantScore === 5 && ((dominantDirection === "bull" && slopeChange < 0) || (dominantDirection === "bear" && slopeChange > 0))) {
-    systemStage = "极端后的转折预警";
+    systemStage = `${directionText}极端后的再转折观察`;
   }
   if (structure2B.label !== "无" && dominantScore < 3) systemStage = "2B转折观察";
 
@@ -361,11 +416,22 @@ function analyzeKlines(payload, quote) {
   }
 
   let humanState = "常态";
-  if (bias120 >= 25) humanState = "正乖离极端 / 亢奋";
+  if (bias120 >= 50) humanState = "人性之极：泡沫式正乖离";
+  else if (bias120 >= 25) humanState = "正乖离极端 / 亢奋";
   else if (bias120 >= 15) humanState = "正乖离偏高";
+  else if (bias120 <= -50) humanState = "人性之极：崩溃式负乖离";
   else if (bias120 <= -25) humanState = "负乖离极端 / 恐慌";
   else if (bias120 <= -15) humanState = "负乖离偏低";
   if (volumeRatio >= 1.8 && Math.abs(bias120) >= 15) humanState += " + 放量";
+
+  let turningClue = slopeState.reversalCue;
+  if (structure2B.label !== "无") {
+    turningClue = `${structure2B.label}：先按回归处理，不能替代均线密集后的大行情`;
+  } else if (dense && Math.abs(slope20) < 0.25) {
+    turningClue = "均线密集且短均走平：等待价格带量扩散";
+  } else if (dominantScore === 5 && Math.abs(bias120) >= 15) {
+    turningClue = "极端段：不猜顶底，只盯斜率衰减与EMA20失守/收复";
+  }
 
   let riskReward = null;
   let riskRewardText = "等待方向形成";
@@ -408,7 +474,7 @@ function analyzeKlines(payload, quote) {
       phase = "上升第1步：站上短均";
       next = "下一步看 EMA20 是否拐头向上，避免只是假突破。";
     }
-    bottomLine = `多头底线：收盘跌回 EMA20(${fmtNumber(currentE20)}) 或 EMA20 拐头失败。`;
+    bottomLine = `多头底线：收盘跌回 EMA20(${fmtNumber(currentE20)}) 或抵扣条件转弱。`;
   }
 
   if (bearScore > bullScore && bearScore > 0) {
@@ -429,7 +495,7 @@ function analyzeKlines(payload, quote) {
       phase = "下降第1步：跌破短均";
       next = "下一步看 EMA20 是否拐头向下，避免只是假跌破。";
     }
-    bottomLine = `空头修复线：重新站回 EMA20(${fmtNumber(currentE20)}) 且短均拐头。`;
+    bottomLine = `空头修复线：重新站回 EMA20(${fmtNumber(currentE20)}) 且抵扣条件转强。`;
   }
 
   return {
@@ -456,7 +522,12 @@ function analyzeKlines(payload, quote) {
     density,
     dense,
     deduction20,
+    deductionGap,
+    deductionText,
+    costState,
+    slopeState,
     structure2B,
+    turningClue,
     rangePosition,
     humanState,
     riskReward,
@@ -549,11 +620,14 @@ function renderSignals(quotes, klines) {
         </div>
         <div class="facts">
           <div class="fact"><span>EMA20斜率 / 加速度</span><b class="${slopeClass}">${slopeText} / ${fmtNumber(analysis.slopeChange)}%</b></div>
+          <div class="fact"><span>斜率阶段</span><b class="${analysis.slopeState.tone}">${analysis.slopeState.label}</b></div>
+          <div class="fact"><span>成本线方向</span><b class="${analysis.costState.tone}">${analysis.costState.label}</b></div>
           <div class="fact"><span>均线密集度</span><b class="${analysis.dense ? "info" : "neutral"}">${fmtNumber(analysis.density)}% ${analysis.dense ? "· 密集" : ""}</b></div>
-          <div class="fact"><span>明日MA20抵扣价</span><b>${fmtNumber(analysis.deduction20)}</b></div>
+          <div class="fact"><span>明日MA20抵扣</span><b>${fmtNumber(analysis.deduction20)} · ${analysis.deductionText}</b></div>
           <div class="fact"><span>2B结构</span><b class="${analysis.structure2B.tone}">${analysis.structure2B.label}</b></div>
           <div class="fact"><span>人性 / 乖离状态</span><b>${analysis.humanState}</b></div>
           <div class="fact"><span>参考盈亏比</span><b class="${analysis.riskReward >= 3 ? "up" : analysis.riskReward ? "warn" : "neutral"}">${analysis.riskRewardText}</b></div>
+          <div class="fact"><span>转折线索</span><b class="${analysis.structure2B.tone}">${analysis.turningClue}</b></div>
         </div>
         <p class="plan">${analysis.next}<br>${analysis.bottomLine}</p>
       </article>
